@@ -732,3 +732,113 @@ fn operator_leads_get_one_report_after_their_whole_batch_stops(cx: &mut TestAppC
         })
         .unwrap();
 }
+
+#[gpui::test]
+fn a_lead_can_stop_and_message_its_own_plan_workers_only(cx: &mut TestAppContext) {
+    let (window, other, caller) = setup(cx);
+    let own = launch(window, caller, "own", json!({}), cx);
+    let foreign = launch(window, caller, "foreign", json!({}), cx);
+    let task = |session| monocode_core::orchestration::SummaryTask {
+        session: Some(session),
+        status: "running".into(),
+        ..Default::default()
+    };
+    window
+        .update(cx, |shell, _, _| {
+            shell.orchestration_summaries.insert(
+                caller,
+                monocode_core::orchestration::Summary {
+                    tasks: vec![task(own)],
+                    live: true,
+                },
+            );
+            shell.orchestration_summaries.insert(
+                other,
+                monocode_core::orchestration::Summary {
+                    tasks: vec![task(foreign)],
+                    live: true,
+                },
+            );
+        })
+        .unwrap();
+    let listed = call(window, caller, "list", "sessions.list", json!({}), cx).unwrap();
+    let ids: Vec<i64> = listed["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["sessionId"].as_i64().unwrap())
+        .collect();
+    assert!(ids.contains(&own), "the lead sees its own plan worker");
+    assert!(
+        !ids.contains(&foreign),
+        "another plan's worker stays hidden"
+    );
+    let stopped = call(
+        window,
+        caller,
+        "stop-own",
+        "sessions.stop",
+        json!({"sessionId": own}),
+        cx,
+    );
+    assert_eq!(stopped.unwrap()["stopped"], json!(true));
+    let refused = "Only other regular project sessions can be managed here";
+    for action in ["sessions.archive", "sessions.delete"] {
+        let request = action.replace('.', "-");
+        let result = call(
+            window,
+            caller,
+            &request,
+            action,
+            json!({"sessionId": own}),
+            cx,
+        );
+        assert_eq!(result.unwrap_err(), refused, "{action} stays with the rail");
+    }
+    let foreign_stop = call(
+        window,
+        caller,
+        "stop-foreign",
+        "sessions.stop",
+        json!({"sessionId": foreign}),
+        cx,
+    );
+    assert_eq!(foreign_stop.unwrap_err(), refused);
+}
+
+#[gpui::test]
+fn sessions_send_steers_a_busy_session_mid_turn(cx: &mut TestAppContext) {
+    let (window, _, caller) = setup(cx);
+    let worker = launch(window, caller, "worker", json!({}), cx);
+    window
+        .update(cx, |shell, _, cx| {
+            let view = shell.ensure_session(worker, cx).unwrap();
+            view.update(cx, |v, cx| {
+                v.load(cx);
+                v.summary.provider = "claude".into();
+                v.busy = true;
+            });
+        })
+        .unwrap();
+    cx.run_until_parked();
+    let sent = call(
+        window,
+        caller,
+        "steer",
+        "sessions.send",
+        json!({"sessionId": worker, "prompt": "Doop is available now"}),
+        cx,
+    )
+    .unwrap();
+    assert_eq!(sent["steered"], json!(true));
+    assert_eq!(sent["submitted"], json!(true));
+    let drafted = call(
+        window,
+        caller,
+        "draft",
+        "sessions.draft",
+        json!({"sessionId": worker, "prompt": "later"}),
+        cx,
+    );
+    assert!(drafted.is_err(), "a draft still waits for an idle session");
+}

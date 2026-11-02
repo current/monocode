@@ -50,6 +50,33 @@ impl Conversation {
             ..Default::default()
         }
     }
+    /// Whether an app (operator) message can join this busy session's turn now.
+    pub(crate) fn accepts_app_steer(&self) -> bool {
+        self.busy
+            && !self.stopping
+            && self.loaded
+            && self.history_ready()
+            && !self.is_remote()
+            && self.settings.mono.is_none()
+    }
+    /// An app (operator) message to a busy session, delivered like a composer
+    /// Send: it steers the running turn when the provider can steer, otherwise it
+    /// waits in the queue as the next turn. The composer's own text and
+    /// attachments are untouched. Returns whether it steers.
+    pub(crate) fn app_steer(&mut self, prompt: String, cx: &mut Context<Self>) -> bool {
+        let mut message = self.message(prompt, Vec::new(), None, cx);
+        message.steer = Kind::from_id(&self.summary.provider).can_steer();
+        let steers = message.steer;
+        self.follow_ups.motion.insert(
+            &message.id,
+            self.follow_ups.state.messages.is_empty(),
+            !cx.reduce_motion(),
+        );
+        self.follow_ups.state.messages.push(message);
+        self.save_follow_ups(cx);
+        cx.emit(SessionChanged);
+        steers
+    }
     pub(super) fn save_follow_ups(&mut self, cx: &mut Context<Self>) {
         self.follow_ups.state.revision += 1;
         let mut snapshot = self.follow_ups.state.clone();
@@ -927,6 +954,34 @@ mod tests {
                 messages[0].steer
             })
             .unwrap()
+    }
+
+    #[gpui::test]
+    fn app_messages_steer_a_busy_turn_without_touching_the_composer(cx: &mut TestAppContext) {
+        let window = conversation(cx);
+        for (provider, steers) in [("claude", true), ("grok", false)] {
+            window
+                .update(cx, |view, _, cx| {
+                    view.follow_ups.state.messages.clear();
+                    view.summary.provider = provider.into();
+                    view.busy = true;
+                    view.input
+                        .update(cx, |input, cx| input.set_text("worker draft".into(), cx));
+                    assert!(view.accepts_app_steer(), "a busy loaded session takes it");
+                    assert_eq!(view.app_steer("lead note".into(), cx), steers);
+                    let messages = &view.follow_ups.state.messages;
+                    assert_eq!(messages.len(), 1);
+                    assert_eq!(messages[0].text, "lead note");
+                    assert_eq!(messages[0].steer, steers, "{provider}");
+                    assert_eq!(view.input.read(cx).content.to_string(), "worker draft");
+                    view.busy = false;
+                    assert!(
+                        !view.accepts_app_steer(),
+                        "an idle session starts a turn instead"
+                    );
+                })
+                .unwrap();
+        }
     }
 
     #[gpui::test]

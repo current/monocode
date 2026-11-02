@@ -245,7 +245,7 @@ impl Shell {
         input: &Value,
         caller: i64,
         project: &str,
-        manage: bool,
+        manage: Option<&str>,
         cx: &App,
     ) -> Result<i64, String> {
         let id = session_id(input, "sessionId", &self.store)?;
@@ -256,9 +256,16 @@ impl Shell {
         if monocode_core::files::path_key(&summary.cwd) != monocode_core::files::path_key(project) {
             return Err("Session is outside this project.".into());
         }
-        if manage
+        // A lead may stop, message or draft into the workers of its own plan run (the same stop the
+        // rail's Cancel task does); archive/delete stay with the rail so its task list stays whole.
+        let own_plan_worker = self.owns_plan_worker(caller, id)
+            && matches!(
+                manage,
+                Some("sessions.stop" | "sessions.send" | "sessions.draft")
+            );
+        if manage.is_some()
             && (id == caller
-                || self.orchestration_worker(id)
+                || (self.orchestration_worker(id) && !own_plan_worker)
                 || self
                     .monos
                     .as_ref()
@@ -267,6 +274,12 @@ impl Shell {
             return Err("Only other regular project sessions can be managed here".into());
         }
         Ok(id)
+    }
+    /// True when `worker` runs a task of the plan run owned by the `lead` chat.
+    fn owns_plan_worker(&self, lead: i64, worker: i64) -> bool {
+        self.orchestration_summaries
+            .get(&lead)
+            .is_some_and(|s| s.tasks.iter().any(|t| t.session == Some(worker)))
     }
     pub(crate) fn app_placement(
         &self,
@@ -330,9 +343,9 @@ impl Shell {
             "sessions.list" => Ok(
                 json!({"cwd":project,"sessions":self.order.iter().filter_map(|id|{
                 let metadata=self.session_metadata(*id,cx);
-                if metadata.summary.cwd!=project || self.monos.as_ref().is_some_and(|m|m.read(cx).hidden_session(*id)) || self.orchestration_worker(*id){return None;}
+                if metadata.summary.cwd!=project || self.monos.as_ref().is_some_and(|m|m.read(cx).hidden_session(*id)) || (self.orchestration_worker(*id) && !self.owns_plan_worker(call.session,*id)){return None;}
                 let live=self.sessions.get(id).map(|v|v.read(cx));
-                Some(json!({"id":id,"sessionId":id,"title":metadata.summary.title,"harness":metadata.summary.provider,"model":live.and_then(|v|v.settings.model.clone()).or_else(||self.session_details.get(id).and_then(|m|m.model.clone())),"busy":metadata.busy,"hasDraft":live.is_some_and(|v|v.has_saved_draft() || !v.input.read(cx).content.is_empty()) || self.draft_sessions.contains(id),"archived":metadata.summary.archived}))
+                Some(json!({"id":id,"sessionId":id,"title":metadata.summary.title,"harness":metadata.summary.provider,"model":live.and_then(|v|v.settings.model.clone()).or_else(||self.session_details.get(id).and_then(|m|m.model.clone())),"busy":metadata.busy,"hasDraft":live.is_some_and(|v|v.has_saved_draft() || !v.input.read(cx).content.is_empty()) || self.draft_sessions.contains(id),"archived":metadata.summary.archived,"planWorker":self.orchestration_worker(*id)}))
             }).collect::<Vec<_>>()}),
             ),
             "models.list" => {
@@ -410,7 +423,7 @@ impl Shell {
                 },cx);
                 return;
             }
-            "sessions.read" => match self.app_target(&input, call.session, &project, false, cx) {
+            "sessions.read" => match self.app_target(&input, call.session, &project, None, cx) {
                 Ok(id) => {
                     let busy = self.session_metadata(id, cx).busy;
                     let draft = self
@@ -435,7 +448,7 @@ impl Shell {
             "sessions.send" | "sessions.draft" | "sessions.stop" | "sessions.archive"
             | "sessions.delete" => {
                 match self
-                    .app_target(&input, call.session, &project, true, cx)
+                    .app_target(&input, call.session, &project, Some(action.as_str()), cx)
                     .and_then(|id| {
                         self.ensure_session(id, cx)
                             .map(|view| (id, view))
@@ -502,7 +515,19 @@ impl Shell {
                             Ok(json!({"sessionId":id,"stopped":true}))
                         } else {
                             view.update(cx, |v, cx| v.load(cx));
-                            if !view.read(cx).ready_for_external(cx)
+                            if action == "sessions.send" && view.read(cx).accepts_app_steer() {
+                                // A busy session takes the message mid-turn, as a composer Send does.
+                                match app::prompt(&input) {
+                                    Err(e) => Err(e),
+                                    Ok(prompt) => {
+                                        let steered =
+                                            view.update(cx, |v, cx| v.app_steer(prompt, cx));
+                                        Ok(
+                                            json!({"sessionId":id,"submitted":true,"saved":false,"steered":steered,"queued":!steered}),
+                                        )
+                                    }
+                                }
+                            } else if !view.read(cx).ready_for_external(cx)
                                 || view.read(cx).has_saved_draft()
                             {
                                 Err("Session is busy, loading, or has an unsent draft. Its draft was preserved.".into())
@@ -556,7 +581,7 @@ impl Shell {
             "folders.list" => Ok(
                 json!({"cwd":project,"folders":self.groups.get(&project).cloned().unwrap_or_default().folders.iter().map(|f|json!({"id":f.id,"name":f.name,"sessionIds":f.session_ids})).collect::<Vec<_>>()}),
             ),
-            "folders.move" => match self.app_target(&input, call.session, &project, false, cx) {
+            "folders.move" => match self.app_target(&input, call.session, &project, None, cx) {
                 Err(e) => Err(e),
                 Ok(id) => {
                     let mut groups = self.groups.get(&project).cloned().unwrap_or_default();
