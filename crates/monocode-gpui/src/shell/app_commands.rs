@@ -151,7 +151,10 @@ impl Shell {
             .sessions
             .get(&call.session)
             .map(|v| v.read(cx))
-            .filter(|v| v.settings.operator_enabled)
+            .filter(|v| {
+                !v.settings.operator_worker
+                    && (v.settings.operator_enabled || call.action == "operator.request")
+            })
             .ok_or("Operator is not enabled for this thread.")?;
         if caller.summary.cwd.starts_with("remote://") {
             return Err("Operator is not available on remote projects".into());
@@ -172,7 +175,8 @@ impl Shell {
             || caller.settings.access == monocode_core::agent::AccessMode::ReadOnly)
             && !matches!(
                 call.action.as_str(),
-                "models.list"
+                "operator.request"
+                    | "models.list"
                     | "sessions.list"
                     | "sessions.read"
                     | "folders.list"
@@ -187,7 +191,22 @@ impl Shell {
     }
     fn handle_app_call(&mut self, call: Call, window: &mut Window, cx: &mut Context<Self>) {
         if let Err(error) = self.authorize_app_call(&call, cx) {
+            if error == "Operator is not enabled for this thread."
+                && let Some(view) = self.sessions.get(&call.session)
+            {
+                view.update(cx, |v, cx| {
+                    v.request_operator(format!("Requested app action: {}", call.action), cx)
+                });
+            }
             let _ = call.reply.send(Err(error));
+            return;
+        }
+        if call.action == "operator.request" {
+            if let Some(view) = self.sessions.get(&call.session) {
+                let reason = app::text(&call.input, "reason", 2000).unwrap_or_default();
+                view.update(cx, |v, cx| v.request_operator(reason, cx));
+            }
+            let _ = call.reply.send(Ok(json!({"pending":true})));
             return;
         }
         let key = (call.session, call.request_id.clone());

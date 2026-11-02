@@ -127,6 +127,7 @@ fn submitted_operator_access_survives_the_composer_reset(cx: &mut TestAppContext
     window
         .update(cx, |shell, _, cx| {
             assert!(!shell.sessions[&child].read(cx).settings.operator_enabled);
+            assert!(shell.sessions[&child].read(cx).settings.operator_worker);
         })
         .unwrap();
 }
@@ -731,4 +732,96 @@ fn operator_leads_get_one_report_after_their_whole_batch_stops(cx: &mut TestAppC
             assert!(!report.text.contains(&format!("Session {dismissed}")));
         })
         .unwrap();
+}
+
+#[gpui::test]
+fn ordinary_chats_request_operator_but_workers_cannot(cx: &mut TestAppContext) {
+    let (window, _, caller) = setup(cx);
+    window
+        .update(cx, |shell, _, cx| {
+            shell.sessions[&caller].update(cx, |v, _| v.settings.operator_enabled = false);
+        })
+        .unwrap();
+    assert!(call(window, caller, "refused", "sessions.list", json!({}), cx).is_err());
+    window
+        .update(cx, |shell, _, cx| {
+            assert!(shell.sessions[&caller].read(cx).operator_request.is_some());
+        })
+        .unwrap();
+    assert_eq!(
+        call(
+            window,
+            caller,
+            "request",
+            "operator.request",
+            json!({"reason":"Review in parallel"}),
+            cx
+        )
+        .unwrap()["pending"],
+        true
+    );
+    window
+        .update(cx, |shell, _, cx| {
+            let view = &shell.sessions[&caller];
+            assert_eq!(
+                view.read(cx).operator_request.as_deref(),
+                Some("Review in parallel")
+            );
+            view.update(cx, |v, _| {
+                v.settings.operator_worker = true;
+                v.operator_request = None;
+            });
+        })
+        .unwrap();
+    assert!(
+        call(
+            window,
+            caller,
+            "worker",
+            "operator.request",
+            json!({"reason":"Review"}),
+            cx
+        )
+        .is_err()
+    );
+    window
+        .update(cx, |shell, _, cx| {
+            assert!(shell.sessions[&caller].read(cx).operator_request.is_none());
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn project_operator_default_only_affects_new_owner_chats(cx: &mut TestAppContext) {
+    let (window, _, _) = setup(cx);
+    for enabled in [true, false] {
+        window
+            .update(cx, |shell, _, cx| {
+                let path = shell.workspace.project.clone();
+                let mut appearance = shell.appearance(&path);
+                appearance.new_chats_operator = enabled;
+                shell.save_project_appearance(path, appearance, cx);
+                shell.create_session(Kind::Codex, false, cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, cx| {
+                let newest = *shell.sessions.keys().max().unwrap();
+                assert_eq!(
+                    shell.sessions[&newest].read(cx).settings.operator_enabled,
+                    enabled
+                );
+                assert_eq!(
+                    locked(&shell.store)
+                        .unwrap()
+                        .agent_settings(newest)
+                        .unwrap()
+                        .unwrap_or_default()
+                        .operator_enabled,
+                    enabled
+                );
+            })
+            .unwrap();
+    }
 }

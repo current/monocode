@@ -47,6 +47,7 @@ fn operator_launch_applies_validated_overrides_without_transferring_app_access()
     assert_eq!(settings.worktree_cwd.as_deref(), Some("/existing"));
     assert!(!settings.operator && !settings.orchestrator && !settings.plan);
     assert!(!settings.operator_enabled);
+    assert!(settings.operator_worker);
     assert!(settings.environment.is_empty());
     for bad in [
         json!({"model":"unknown"}),

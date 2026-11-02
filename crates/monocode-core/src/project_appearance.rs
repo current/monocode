@@ -19,6 +19,7 @@ pub const MASCOTS: [&str; 10] = [
 #[serde(default)]
 pub struct ProjectAppearance {
     pub name: String,
+    pub new_chats_operator: bool,
     pub color: Option<u32>,
     pub mascot: Option<String>,
     pub logo: Option<String>,

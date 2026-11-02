@@ -135,6 +135,87 @@ fn approval_button(id: &'static str, label: &'static str) -> gpui::Stateful<gpui
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
 }
 
+impl Conversation {
+    pub(crate) fn request_operator(&mut self, reason: String, cx: &mut Context<Self>) {
+        if self.settings.operator_worker || self.settings.operator_enabled || self.is_remote() {
+            return;
+        }
+        self.operator_request = Some(reason);
+        cx.emit(SessionChanged);
+        cx.notify();
+    }
+    pub(crate) fn decide_operator(&mut self, enable: bool, cx: &mut Context<Self>) {
+        if self.operator_request.take().is_none() || self.settings.operator_worker {
+            return;
+        }
+        if enable {
+            self.settings.operator_enabled = true;
+            self.save_settings(cx);
+            self.enqueue_follow_up("Operator enabled; continue.".into(), None, cx);
+        }
+        cx.emit(SessionChanged);
+        cx.notify();
+    }
+    pub(super) fn operator_grant_card(&self, cx: &mut Context<Self>) -> AnyElement {
+        let Some(reason) = &self.operator_request else {
+            return div().into_any_element();
+        };
+        let mut ink = shell_fill();
+        ink.a = 1.;
+        composer_shelf::shelf("operator-grant-shelf")
+            .child(
+                composer_shelf::card("operator-grant-card", self.classic_layout)
+                    .debug_selector(|| "operator-grant-card".into())
+                    .role(Role::Group)
+                    .aria_label("This chat wants to start and manage agents")
+                    .child(
+                        div()
+                            .min_h(px(32.))
+                            .py_1()
+                            .text_color(content(0.75))
+                            .child("This chat wants to start and manage agents"),
+                    )
+                    .child(
+                        div()
+                            .id("operator-reason")
+                            .max_h(px(180.))
+                            .overflow_y_scroll()
+                            .border_t_1()
+                            .border_color(content(0.05))
+                            .py_1()
+                            .text_color(content(0.75))
+                            .child(reason.clone()),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .justify_end()
+                            .gap(px(6.))
+                            .py_1()
+                            .child(
+                                approval_button("operator-not-now", "Not now")
+                                    .text_color(content(0.5))
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.decide_operator(false, cx)
+                                    })),
+                            )
+                            .child(
+                                approval_button("operator-enable", "Enable Operator")
+                                    .bg(content(1.))
+                                    .text_color(ink)
+                                    .font_weight(gpui::FontWeight::MEDIUM)
+                                    .on_click(
+                                        cx.listener(|this, _, _, cx| {
+                                            this.decide_operator(true, cx)
+                                        }),
+                                    ),
+                            ),
+                    ),
+            )
+            .into_any_element()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -164,6 +245,64 @@ mod tests {
             })
             .unwrap()
         })
+    }
+
+    #[gpui::test]
+    fn operator_grant_persists_and_queues_follow_up(cx: &mut TestAppContext) {
+        let window = conversation(cx);
+        window
+            .update(cx, |v, _, cx| {
+                v.request_operator("Parallel review".into(), cx);
+                v.decide_operator(false, cx);
+                assert!(!v.settings.operator_enabled);
+                v.request_operator("Parallel review".into(), cx);
+                v.decide_operator(true, cx);
+                assert!(v.settings.operator_enabled);
+                assert!(v.operator_request.is_none());
+                assert_eq!(
+                    v.follow_ups.state.messages.last().unwrap().text,
+                    "Operator enabled; continue."
+                );
+            })
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |v, _, _| {
+                assert!(
+                    locked(&v.store)
+                        .unwrap()
+                        .agent_settings(v.summary.id)
+                        .unwrap()
+                        .unwrap()
+                        .operator_enabled
+                );
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn operator_card_buttons_stay_inside_card(cx: &mut TestAppContext) {
+        let window = conversation(cx);
+        window
+            .update(cx, |v, _, cx| {
+                v.request_operator(
+                    "Review the implementation and tests in parallel.".into(),
+                    cx,
+                )
+            })
+            .unwrap();
+        let visual = &mut VisualTestContext::from_window(window.into(), cx);
+        for width in [680., 358.] {
+            visual.simulate_resize(gpui::size(px(width), px(600.)));
+            visual.refresh().unwrap();
+            let card = visual.debug_bounds("operator-grant-card").unwrap();
+            for id in ["operator-enable", "operator-not-now"] {
+                let button = visual.debug_bounds(id).unwrap();
+                assert!(button.left() >= card.left());
+                assert!(button.right() <= card.right());
+                assert!(button.bottom() <= card.bottom());
+            }
+        }
     }
 
     fn request(id: &str, can_remember: bool) -> Approval {

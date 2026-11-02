@@ -130,6 +130,8 @@ pub struct Settings {
     pub operator: bool,
     /// A submitted /operator grants this thread access independently of its next draft.
     pub operator_enabled: bool,
+    /// Created through an app/inbox launch; cannot request Operator grants.
+    pub operator_worker: bool,
     pub orchestrator: bool,
     pub new_worktree: bool,
     pub worktree_base: Option<String>,

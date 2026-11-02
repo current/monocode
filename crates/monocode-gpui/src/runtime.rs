@@ -167,7 +167,8 @@ fn run_turn_using(
         transcript = locked(&store)?.load(summary.id)?;
         history_loaded = true;
         turn_start = transcript.rows.len();
-        settings.operator_enabled |= settings.operator;
+        settings.operator_enabled =
+            !settings.operator_worker && (settings.operator_enabled || settings.operator);
         let mut persisted = settings.clone();
         persisted.handoff = None;
         // These modes belong to this turn, not the next composer draft.
@@ -523,6 +524,17 @@ fn run_turn_using(
             prompt = format!(
                 "{}\n\nUser request:\n{prompt}",
                 monocode_core::orchestration::INSTRUCTIONS
+            );
+        }
+        if !raw_native_command
+            && !settings.operator_worker
+            && !settings.operator_enabled
+            && settings.mono.is_none()
+        {
+            let cli = std::env::current_exe().map_err(|e| e.to_string())?;
+            prompt = format!(
+                "Before starting or managing agents, request Operator with: {} app operator.request --json '{{\"reason\":\"Why agents are needed\"}}'. Wait for the user to enable it.\n\n{prompt}",
+                shlex_quote(&cli.to_string_lossy())
             );
         }
         if !raw_native_command && settings.operator_enabled {
