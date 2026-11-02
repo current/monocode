@@ -10,7 +10,7 @@ use gpui::{
 use std::{hash::BuildHasher, time::Instant};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Kind {
+pub(crate) enum Kind {
     Operator,
     Plan,
     Orchestrator,
@@ -45,7 +45,7 @@ impl Kind {
 }
 
 #[derive(Clone, Copy)]
-pub(super) struct Burst {
+pub(crate) struct Burst {
     pub(super) prompt: usize,
     kind: Kind,
     born: Instant,
@@ -54,7 +54,7 @@ pub(super) struct Burst {
 }
 
 impl Burst {
-    pub(super) fn new(prompt: usize, kind: Kind) -> Self {
+    pub(crate) fn new(prompt: usize, kind: Kind) -> Self {
         Self {
             prompt,
             kind,
@@ -63,7 +63,7 @@ impl Burst {
         }
     }
 
-    pub(super) fn active(&self, now: Instant) -> bool {
+    pub(crate) fn active(&self, now: Instant) -> bool {
         now.saturating_duration_since(self.born).as_secs_f32() * 1000. < self.kind.duration_ms()
     }
 
@@ -72,7 +72,7 @@ impl Burst {
         self.kind == Kind::Visualize
     }
 
-    pub(super) fn paint(
+    pub(crate) fn paint(
         &self,
         bounds: Bounds<Pixels>,
         corners: Corners<Pixels>,
@@ -183,21 +183,22 @@ impl Bubble {
     }
 }
 
-/// The CSS custom properties each burst paints with.
-struct Palette {
-    color: Hsla,
-    glow: Hsla,
+/// The CSS custom properties each burst paints with. The sidebar's lead
+/// rows reuse a mode's colour, glow and sheen stops.
+pub(crate) struct Palette {
+    pub(crate) color: Hsla,
+    pub(crate) glow: Hsla,
     /// A glyph's bright center: --mode-spark, or the gradient's first stop.
     spark: Hsla,
     ink: Hsla,
     halo_ring: Hsla,
     halo_glow: Hsla,
-    sheen: [(f32, Hsla); 4],
+    pub(crate) sheen: [(f32, Hsla); 4],
     ember_glow: Hsla,
 }
 
 impl Palette {
-    fn new(kind: Kind, light: bool) -> Self {
+    pub(crate) fn new(kind: Kind, light: bool) -> Self {
         if kind == Kind::Operator {
             let color = if light {
                 hex(0xf59e0b, 1.)

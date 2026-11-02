@@ -19,6 +19,8 @@ pub(crate) struct Rails {
     pub(super) started: HashMap<i64, Vec<i64>>,
     pub(super) children: HashSet<i64>,
     frames: Option<gpui::Task<()>>,
+    /// Lead and agent marks: which leads replay their dispatch burst.
+    pub(super) leads: super::lead_marks::LeadMarks,
 }
 #[derive(Clone, Copy)]
 struct Motion {
@@ -180,6 +182,7 @@ impl Shell {
         self.rails.motions.retain(|id, _| seen.contains(id));
         self.rails.started = started;
         self.rails.children = children;
+        self.sync_lead_marks(cx);
         if animating && self.rails.frames.is_none() {
             self.rails.frames = Some(cx.spawn(async move |this, cx| {
                 cx.background_executor()
@@ -295,6 +298,7 @@ impl Shell {
             return row;
         }
         let work_item = self.work_item_badge(id, false, cx);
+        let agent_marker = self.agent_marker(id, cx);
         let agents = match rail {
             Some((Rail::Agents(summary), true)) => Some(self.agents(id, summary, cx)),
             _ => None,
@@ -365,6 +369,18 @@ impl Shell {
             model
         };
         let status = self.classic_session_status(id, &session, cx);
+        let lead_mode = self.lead_mode(id, cx);
+        let orchestrates = matches!(rail, Some((Rail::Agents(_), _)));
+        let lead_color = lead_mode.map(|mode| {
+            crate::transcript::burst::Palette::new(mode, crate::theme::is_light()).color
+        });
+        let (lead_under, lead_over) = match lead_mode {
+            Some(mode) => {
+                let (under, over) = self.lead_layers(id, mode, cx);
+                (Some(under), over)
+            }
+            None => (None, None),
+        };
         let title = div()
             .debug_selector(move || format!("session-title-{id}"))
             .flex_1()
@@ -469,20 +485,23 @@ impl Shell {
                                     }),
                             )
                             .children(work_item)
+                            .children(agent_marker)
                             .when(
                                 self.automation_state.session_automations.contains_key(&id),
                                 |d| d.child(icon("zap", 12.).text_color(rgb(0xfbbf24))),
                             )
-                            .when_some(rail, |d, (rail, _)| {
+                            // A lead's glyph, in its mode's colour.
+                            .when_some(lead_color, |d, color| {
                                 d.child(
                                     icon(
-                                        match rail {
-                                            Rail::Agents(_) => "share",
-                                            Rail::Started(_) => "cursor-magic",
+                                        if orchestrates {
+                                            "share"
+                                        } else {
+                                            "cursor-magic"
                                         },
                                         13.,
                                     )
-                                    .text_color(content(0.5)),
+                                    .text_color(color),
                                 )
                             }),
                     ),
@@ -551,7 +570,9 @@ impl Shell {
                 },
             )
             .when(self.deleting.contains(&id), |d| d.opacity(0.5))
+            .children(lead_under)
             .child(body)
+            .children(lead_over)
             .child(anchor.probe())
             .on_hover(cx.listener(move |this, hovered, window, cx| {
                 // Original cards carry their details inline, so hovering only
@@ -1168,5 +1189,193 @@ mod tests {
             bounds(cx, format!("sidebar-session-{child}")).is_none(),
             "the operator rail folds away once its thread leaves play"
         );
+    }
+
+    /// Adds codex chats with history to the current project.
+    fn chats(shell: &mut Shell, n: usize, cx: &mut Context<Shell>) -> Vec<i64> {
+        (0..n)
+            .map(|_| {
+                let summary = locked(&shell.store)
+                    .unwrap()
+                    .create("codex", &shell.workspace.project)
+                    .unwrap();
+                let id = summary.id;
+                shell.add(summary, cx);
+                shell.sessions[&id].update(cx, |s, _| s.summary.has_messages = true);
+                id
+            })
+            .collect()
+    }
+    fn summary(worker: i64, live: bool, status: &str) -> monocode_core::orchestration::Summary {
+        monocode_core::orchestration::Summary {
+            live,
+            tasks: vec![monocode_core::orchestration::SummaryTask {
+                session: Some(worker),
+                title: "Write the tests".into(),
+                provider: "codex".into(),
+                model: None,
+                status: status.into(),
+            }],
+        }
+    }
+
+    #[gpui::test]
+    fn unselected_leads_and_agents_wear_their_marks_in_both_layouts(cx: &mut TestAppContext) {
+        cx.update(|cx| cx.set_reduce_motion(true));
+        let (window, _, lead) = crate::shell::tests::window(cx);
+        let cx = &mut VisualTestContext::from_window(window.into(), cx);
+        let (seen, agent, orchestrator) = window
+            .update(cx, |shell, _, cx| {
+                shell.sessions[&lead].update(cx, |s, _| s.summary.has_messages = true);
+                let ids = chats(shell, 4, cx);
+                let (seen, agent, orchestrator, worker) = (ids[0], ids[1], ids[2], ids[3]);
+                shell.started_by.insert(seen, lead);
+                shell.started_by.insert(agent, lead);
+                shell
+                    .orchestration_summaries
+                    .insert(orchestrator, summary(worker, false, "completed"));
+                // One of the lead's sessions is in view, so its rail is open,
+                // while the lead and its other session are not chosen.
+                shell.selected_sessions.clear();
+                shell.workspace.active = Some(seen);
+                shell.invalidate_chrome(cx);
+                (seen, agent, orchestrator)
+            })
+            .unwrap();
+        for classic in [false, true] {
+            window
+                .update(cx, |shell, _, cx| {
+                    shell.workspace.classic_layout = classic;
+                    shell.workspace.active = Some(seen);
+                    shell.invalidate_chrome(cx);
+                })
+                .unwrap();
+            settle(window, cx);
+            for id in [lead, orchestrator] {
+                let row = bounds(cx, format!("sidebar-session-{id}"))
+                    .unwrap_or_else(|| panic!("lead {id} listed (classic {classic})"));
+                let mark = bounds(cx, format!("sidebar-lead-{id}"))
+                    .unwrap_or_else(|| panic!("lead {id} tinted (classic {classic})"));
+                assert!(row.contains(&mark.center()), "the tint lies on its row");
+            }
+            assert!(bounds(cx, format!("sidebar-lead-{agent}")).is_none());
+            let row = bounds(cx, format!("sidebar-session-{agent}"))
+                .unwrap_or_else(|| panic!("agent listed (classic {classic})"));
+            if !classic {
+                assert_eq!(row.size.height, px(28.), "a nested row keeps its height");
+            }
+            let marker = bounds(cx, format!("sidebar-agent-of-{agent}"))
+                .unwrap_or_else(|| panic!("agent marked (classic {classic})"));
+            assert!(row.contains(&marker.center()));
+            assert!(bounds(cx, format!("sidebar-agent-of-{lead}")).is_none());
+            // The marker leads back to its lead, not to the agent's own chat.
+            cx.simulate_click(marker.center(), Default::default());
+            cx.run_until_parked();
+            window
+                .read_with(cx, |shell, _| {
+                    assert_eq!(shell.workspace.active, Some(lead), "classic {classic}");
+                    assert!(!shell.lead_bursting(lead), "no burst under reduced motion");
+                })
+                .unwrap();
+        }
+    }
+
+    #[gpui::test]
+    fn reduced_motion_keeps_a_working_lead_still(cx: &mut TestAppContext) {
+        cx.update(|cx| cx.set_reduce_motion(true));
+        let (window, a, _) = crate::shell::tests::window(cx);
+        let cx = &mut VisualTestContext::from_window(window.into(), cx);
+        let (orchestrator, later) = window
+            .update(cx, |shell, _, cx| {
+                let ids = chats(shell, 4, cx);
+                shell
+                    .orchestration_summaries
+                    .insert(ids[0], summary(ids[1], true, "running"));
+                shell.selected_sessions.clear();
+                shell.workspace.active = Some(a);
+                shell.invalidate_chrome(cx);
+                (ids[0], (ids[2], ids[3]))
+            })
+            .unwrap();
+        settle(window, cx);
+        assert!(bounds(cx, format!("sidebar-lead-{orchestrator}")).is_some());
+        assert!(bounds(cx, format!("sidebar-lead-sheen-{orchestrator}")).is_none());
+        window
+            .read_with(cx, |shell, cx| {
+                assert!(!shell.lead_bursting(orchestrator), "no burst replays");
+                assert!(!crate::pulse::running(cx), "no looping frames");
+            })
+            .unwrap();
+
+        // With motion, the working lead's sheen loops on the shared clock and
+        // a lead that starts dispatching replays the burst once.
+        cx.update(|_, cx| cx.set_reduce_motion(false));
+        window
+            .update(cx, |shell, _, cx| {
+                shell.started_by.insert(later.1, later.0);
+                shell.invalidate_chrome(cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        assert!(bounds(cx, format!("sidebar-lead-sheen-{orchestrator}")).is_some());
+        window
+            .read_with(cx, |shell, cx| {
+                assert!(shell.lead_bursting(later.0));
+                assert!(!shell.lead_bursting(orchestrator), "only new leads burst");
+                assert!(crate::pulse::running(cx));
+            })
+            .unwrap();
+    }
+    #[gpui::test]
+    fn a_lead_whose_agents_stop_parks_the_frame_clock(cx: &mut TestAppContext) {
+        // Known before motion turns on, so no dispatch burst keeps frames up.
+        cx.update(|cx| cx.set_reduce_motion(true));
+        let (window, a, _) = crate::shell::tests::window(cx);
+        let cx = &mut VisualTestContext::from_window(window.into(), cx);
+        let (lead, worker) = window
+            .update(cx, |shell, _, cx| {
+                let ids = chats(shell, 2, cx);
+                shell
+                    .orchestration_summaries
+                    .insert(ids[0], summary(ids[1], true, "running"));
+                shell.selected_sessions.clear();
+                shell.workspace.active = Some(a);
+                shell.invalidate_chrome(cx);
+                (ids[0], ids[1])
+            })
+            .unwrap();
+        settle(window, cx);
+        cx.update(|_, cx| cx.set_reduce_motion(false));
+        window
+            .update(cx, |shell, _, cx| shell.invalidate_chrome(cx))
+            .unwrap();
+        cx.run_until_parked();
+        assert!(bounds(cx, format!("sidebar-lead-sheen-{lead}")).is_some());
+        window
+            .read_with(cx, |_, cx| assert!(crate::pulse::running(cx)))
+            .unwrap();
+
+        // The agent finishes; nothing else invalidates the sidebar.
+        window
+            .update(cx, |shell, _, _| {
+                shell
+                    .orchestration_summaries
+                    .insert(lead, summary(worker, false, "completed"));
+            })
+            .unwrap();
+        for _ in 0..40 {
+            cx.executor().advance_clock(Duration::from_millis(33));
+            cx.run_until_parked();
+        }
+        assert!(bounds(cx, format!("sidebar-lead-sheen-{lead}")).is_none());
+        assert!(
+            bounds(cx, format!("sidebar-lead-{lead}")).is_some(),
+            "the tint stays"
+        );
+        window
+            .read_with(cx, |_, cx| {
+                assert!(!crate::pulse::running(cx), "a stopped lead parks the clock")
+            })
+            .unwrap();
     }
 }

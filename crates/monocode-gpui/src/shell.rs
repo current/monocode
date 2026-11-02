@@ -14,6 +14,7 @@ mod idle_agents;
 #[cfg(test)]
 mod image_lightbox_tests;
 mod layout;
+mod lead_marks;
 mod live_agents;
 mod mobile_host;
 mod mono_panes;
@@ -5949,11 +5950,23 @@ impl Shell {
         // A collapsed thread shows a chevron in its mark's place on hover:
         // selecting it opens the rail below.
         let expandable = rail.is_some_and(|(_, open)| !open);
+        // A lead wears its mode's colour: the prompt bubble burst's palette.
+        let lead_mode = rail.and_then(|_| self.lead_mode(id, cx));
+        let lead_color = lead_mode.map(|mode| {
+            crate::transcript::burst::Palette::new(mode, crate::theme::is_light()).color
+        });
+        let (lead_under, lead_over) = match lead_mode {
+            Some(mode) => {
+                let (under, over) = self.lead_layers(id, mode, cx);
+                (Some(under), over)
+            }
+            None => (None, None),
+        };
+        let agent_marker = self.agent_marker(id, cx);
         let mode = rail.map(|(rail, _)| match rail {
             rails::Rail::Agents(summary) => (
                 "share",
-                // fuchsia-200/90
-                gpui::Hsla::from(rgb(0xf5d0fe)).opacity(0.9),
+                lead_color.unwrap_or_else(|| gpui::Hsla::from(rgb(0xf5d0fe)).opacity(0.9)),
                 format!(
                     "Orchestrator, {} {}",
                     summary.tasks.len(),
@@ -5966,10 +5979,14 @@ impl Shell {
             ),
             rails::Rail::Started(children) => (
                 "cursor-magic",
-                // sky-200/90
-                gpui::Hsla::from(rgb(0xbae6fd)).opacity(0.9),
+                lead_color.unwrap_or_else(|| gpui::Hsla::from(rgb(0xbae6fd)).opacity(0.9)),
                 format!(
-                    "Operator, started {} {}",
+                    "{}, started {} {}",
+                    if lead_mode == Some(crate::transcript::burst::Kind::Orchestrator) {
+                        "Orchestrator"
+                    } else {
+                        "Operator"
+                    },
                     children.len(),
                     if children.len() == 1 {
                         "session"
@@ -5998,6 +6015,7 @@ impl Shell {
         let work_item = self.work_item_badge(id, compact, cx);
         let has_badges = work_item.is_some()
             || mode.is_some()
+            || agent_marker.is_some()
             || self.automation_state.session_automations.contains_key(&id);
         let session = self.session_metadata(id, cx);
         let active = self.selected_sessions.contains(&id)
@@ -6123,6 +6141,7 @@ impl Shell {
             .gap_1()
             .flex_shrink_0()
             .children(work_item)
+            .children(agent_marker)
             .when(
                 self.automation_state.session_automations.contains_key(&id),
                 |row| row.child(icon("zap", 12.).text_color(content(0.35))),
@@ -6274,7 +6293,9 @@ impl Shell {
                 |d| d.bg(content(0.14)),
             )
             .when(self.deleting.contains(&id), |d| d.opacity(0.5))
+            .children(lead_under)
             .child(body)
+            .children(lead_over)
             .child(anchor.probe())
             .relative()
             .on_hover(cx.listener(move |this, hovered, window, cx| {
