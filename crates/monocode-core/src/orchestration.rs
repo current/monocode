@@ -39,7 +39,8 @@ impl SummaryTask {
             "running" => "Working",
             "completed" => "Done",
             "failed" => "Failed",
-            "blocked" => "Needs review",
+            // Never started: a dependency failed or the run was stopped.
+            "blocked" => "Not started",
             _ => "Queued",
         }
     }

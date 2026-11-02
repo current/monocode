@@ -711,6 +711,26 @@ impl Shell {
                 .into_any_element()
         }
     }
+    /// Forget a finished run's agent list. Its workers return to the session
+    /// list and the lead's rail falls back to the sessions it started itself.
+    pub(super) fn clear_orchestration_summary(&mut self, lead: i64, cx: &mut Context<Self>) {
+        if self.orchestrations.contains_key(&lead)
+            || !self.orchestration_summaries.get(&lead).is_some_and(|s| !s.live)
+        {
+            return;
+        }
+        let cleared = monocode_core::orchestration::Summary::default();
+        self.orchestration_summaries.insert(lead, cleared.clone());
+        self.rails.open_tasks.retain(|(l, _)| *l != lead);
+        let store = self.store.clone();
+        cx.background_executor()
+            .spawn(async move {
+                let _ = locked(&store).and_then(|s| s.save_orchestration_summary(lead, &cleared));
+            })
+            .detach();
+        self.invalidate_chrome(cx);
+        self.notify_sidebar(cx);
+    }
     /// OrchestrationSidebarAgents, `tree`.
     fn agents(
         &self,
@@ -741,15 +761,38 @@ impl Shell {
                                 "agents"
                             }
                         ))
-                        .child(format!(
-                            "{}/{} done",
-                            summary
-                                .tasks
-                                .iter()
-                                .filter(|task| task.status == "completed")
-                                .count(),
-                            summary.tasks.len()
-                        )),
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(8.))
+                                .child(format!(
+                                    "{}/{} done",
+                                    summary
+                                        .tasks
+                                        .iter()
+                                        .filter(|task| task.status == "completed")
+                                        .count(),
+                                    summary.tasks.len()
+                                ))
+                                .when(!summary.live, |d| {
+                                    d.child(
+                                        div()
+                                            .id(("rail-agents-clear", lead as usize))
+                                            .role(Role::Button)
+                                            .aria_label("Clear finished agents")
+                                            .cursor_pointer()
+                                            .hover(|s| s.text_color(content(0.9)))
+                                            .child("Clear")
+                                            .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                                cx.stop_propagation()
+                                            })
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                this.clear_orchestration_summary(lead, cx)
+                                            })),
+                                    )
+                                }),
+                        ),
                 )
             })
             .flex()
@@ -765,11 +808,13 @@ impl Shell {
                                 .get(&s)
                                 .is_some_and(|v| v.read(cx).needs_approval())
                         });
-                        let open = self.rails.open_tasks.contains(&(lead, ix)) || needs_input;
+                        let open = task.session.is_some()
+                            && (self.rails.open_tasks.contains(&(lead, ix)) || needs_input);
                         let label = task.label(summary, needs_input);
                         let working = summary.live && task.status == "running" && !needs_input;
-                        let alert =
-                            needs_input || matches!(task.status.as_str(), "failed" | "blocked");
+                        let alert = needs_input || task.status == "failed";
+                        // A task that never started has no chat and nothing to show.
+                        let openable = task.session.is_some();
                         let done = task.status == "completed";
                         let tone: gpui::Hsla = if alert {
                             rgb(0xfbbf24).into()
@@ -801,9 +846,9 @@ impl Shell {
                             .gap(px(6.))
                             .px(px(if classic { 8. } else { 6. }))
                             .rounded_md()
-                            .cursor_pointer()
+                            .when(openable, |d| d.cursor_pointer())
                             .when(open && !classic, |d| d.bg(content(0.1)))
-                            .when(!open, |d| d.hover(|s| s.bg(content(0.1))))
+                            .when(!open && openable, |d| d.hover(|s| s.bg(content(0.1))))
                             .child(
                                 div()
                                     .size(px(14.))
@@ -813,7 +858,7 @@ impl Shell {
                                     .child(
                                         div()
                                             .when(classic && open, |d| d.invisible())
-                                            .when(classic, |d| {
+                                            .when(classic && openable, |d| {
                                                 d.group_hover(group.clone(), |s| s.invisible())
                                             })
                                             .child(provider_icon(&task.provider, 14.)),
@@ -830,7 +875,9 @@ impl Shell {
                                                 .justify_center()
                                                 .invisible()
                                                 .when(open, |d| d.visible())
-                                                .group_hover(group.clone(), |s| s.visible())
+                                                .when(openable, |d| {
+                                                    d.group_hover(group.clone(), |s| s.visible())
+                                                })
                                                 .child(
                                                     icon(
                                                         if open {
@@ -892,6 +939,9 @@ impl Shell {
                             )
                             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                             .on_click(cx.listener(move |this, _, _, cx| {
+                                if !openable {
+                                    return;
+                                }
                                 if !this.rails.open_tasks.remove(&(lead, ix)) {
                                     this.rails.open_tasks.insert((lead, ix));
                                 }
