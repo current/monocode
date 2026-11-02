@@ -7,6 +7,7 @@ mod classic_sidebar;
 #[cfg(test)]
 mod classic_surface_tests;
 mod classic_surfaces;
+mod continue_fresh;
 mod file_panes;
 mod idle_agents;
 #[cfg(test)]
@@ -17,6 +18,7 @@ mod mobile_host;
 mod mono_panes;
 pub(crate) mod monos;
 mod notifications;
+mod operator_reports;
 mod orchestration;
 mod picker_preferences;
 mod project_rail;
@@ -596,6 +598,8 @@ pub(crate) struct Shell {
     orchestration_summaries: HashMap<i64, monocode_core::orchestration::Summary>,
     /// Sessions an /operator thread started, by the session that started them.
     started_by: HashMap<i64, i64>,
+    /// Completion reports owed to /operator leads for sessions they started.
+    operator_reports: operator_reports::OperatorReports,
     /// The sidebar rails under orchestrators and /operator threads.
     rails: rails::Rails,
     usage_footer: Entity<UsageFooter>,
@@ -765,6 +769,8 @@ pub(crate) struct Shell {
     review_slide: Option<(i64, PaneSlide, Entity<crate::review::ReviewPane>)>,
     /// A session review card's Review, opened beside its pane next frame.
     pending_review: Option<(i64, crate::review::ReviewTab)>,
+    /// A session created off-render that should open once a window is at hand.
+    pending_open: Option<i64>,
     pending_composer_focus: Option<i64>,
     review_focused: bool,
     review_drag: bool,
@@ -971,6 +977,7 @@ impl Shell {
             orchestrations: HashMap::new(),
             orchestration_summaries: sidebar_metadata.orchestrations,
             started_by: sidebar_metadata.started_by,
+            operator_reports: Default::default(),
             rails: Default::default(),
             usage_footer: cx.new(|cx| UsageFooter::new(active_kind, cx)),
             resources,
@@ -1111,6 +1118,7 @@ impl Shell {
             reviews: HashMap::new(),
             review_slide: None,
             pending_review: None,
+            pending_open: None,
             pending_composer_focus: None,
             review_focused: false,
             review_drag: false,
@@ -1365,6 +1373,7 @@ impl Shell {
                 this.sync_search_session(id, cx);
                 this.orchestration_session_changed(id, cx);
                 this.automation_session_changed(id, cx);
+                this.check_operator_reports(cx);
                 this.sync_review_locks(cx);
                 this.refresh_session_mark(id, cx);
                 this.notification_session_changed(id, cx);
@@ -1377,6 +1386,12 @@ impl Shell {
             .push(cx.subscribe(&view, |this, _, transfer: &Transfer, cx| {
                 this.transfer_response(transfer.clone(), cx)
             }));
+        self.observations.push(cx.subscribe(
+            &view,
+            move |this, _, event: &crate::conversation::cold_cache::ContinueFresh, cx| {
+                this.continue_fresh(id, event.text.clone(), cx)
+            },
+        ));
         self.observations.push(cx.subscribe(
             &view,
             move |this, _, event: &crate::conversation::OpenSessionChanges, cx| {
@@ -8160,6 +8175,9 @@ impl Render for Shell {
             m.update(cx, |m, cx| m.bind_window(window, cx));
         }
         self.render_passes += 1;
+        if let Some(id) = self.pending_open.take() {
+            self.open(id, window, cx);
+        }
         if let Some((id, tab)) = self.pending_review.take()
             && self.workspace.tab_of(id).is_some()
         {

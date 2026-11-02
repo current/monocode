@@ -265,3 +265,65 @@ fn claude_entrypoint_label_is_opt_in_for_every_profile() {
         assert_eq!(label(false, &profile), Some("sdk-cli".into()));
     }
 }
+
+#[test]
+fn delegated_launch_resolves_accounts_by_id_or_label_and_never_falls_back() {
+    let mut book = Book::default();
+    for (id, label) in [
+        ("t3-claude-alt-3", "Claude Alt 3"),
+        ("t3-claude-alt-4", "Claude Alt 4"),
+    ] {
+        book.accounts.push(Account {
+            id: id.into(),
+            provider: "claude".into(),
+            label: label.into(),
+        });
+    }
+    book.rename(Kind::Claude, DEFAULT, "Claude (main)").unwrap();
+    for wanted in [
+        "t3-claude-alt-3",
+        "Claude Alt 3",
+        "claude alt 3",
+        " claude-alt-3 ",
+        "CLAUDEALT3",
+    ] {
+        assert_eq!(
+            book.find(Kind::Claude, wanted).unwrap().id,
+            "t3-claude-alt-3",
+            "{wanted}"
+        );
+    }
+    assert_eq!(
+        book.find(Kind::Claude, "Claude Alt 4").unwrap().id,
+        "t3-claude-alt-4"
+    );
+    assert_eq!(
+        book.find(Kind::Claude, "Claude (main)").unwrap().id,
+        DEFAULT
+    );
+    let unknown = book.find(Kind::Claude, "Claude Alt 9").unwrap_err();
+    assert!(
+        unknown.contains("Unknown claude account") && unknown.contains("Claude Alt 4"),
+        "{unknown}"
+    );
+    assert!(book
+        .find(Kind::Claude, " - ")
+        .unwrap_err()
+        .contains("empty"));
+    // Accounts belong to one provider.
+    assert!(book.find(Kind::Codex, "Claude Alt 3").is_err());
+    book.accounts.push(Account {
+        id: "account-x".into(),
+        provider: "claude".into(),
+        label: "claude-alt-3".into(),
+    });
+    // The exact id still wins; a normalized collision is reported, not guessed.
+    assert_eq!(
+        book.find(Kind::Claude, "t3-claude-alt-3").unwrap().id,
+        "t3-claude-alt-3"
+    );
+    assert!(book
+        .find(Kind::Claude, "Claude Alt 3")
+        .unwrap_err()
+        .contains("ambiguous"));
+}

@@ -30,6 +30,58 @@ impl Global for Shared {}
 pub(crate) fn get(cx: &App) -> Option<Entity<Accounts>> {
     cx.try_global::<Shared>().map(|s| s.0.clone())
 }
+/// Apply a `sessions.start` `account` field to the child's settings and return
+/// the label of the account the child will actually run on.
+pub(crate) fn apply_launch_account(
+    input: &serde_json::Value,
+    kind: Kind,
+    settings: &mut monocode_core::agent::Settings,
+    cx: &App,
+) -> Result<String, String> {
+    let center = get(cx);
+    if let Some(wanted) = input.get("account") {
+        let wanted = wanted.as_str().ok_or("account must be text")?;
+        let center = center.as_ref().ok_or("Provider accounts are unavailable")?;
+        let (profile, _) = center.read(cx).launch_account(kind, wanted)?;
+        settings.account = profile;
+    }
+    Ok(center
+        .map(|c| c.read(cx).label(kind, &settings.account.id))
+        .unwrap_or_else(|| settings.account.id.clone()))
+}
+/// Per-harness account choices for `models.list`, keyed by harness ID.
+pub(crate) fn launch_choices_for(
+    profiles: &[(Kind, Profile)],
+    cx: &App,
+) -> Vec<(String, Vec<serde_json::Value>)> {
+    let Some(center) = get(cx) else {
+        return Vec::new();
+    };
+    let center = center.read(cx);
+    profiles
+        .iter()
+        .map(|(kind, profile)| {
+            (
+                kind.id().to_owned(),
+                center.launch_choices(*kind, &profile.id),
+            )
+        })
+        .filter(|(_, rows)| !rows.is_empty())
+        .collect()
+}
+pub(crate) fn attach_choices(
+    catalog: &mut serde_json::Value,
+    choices: &[(String, Vec<serde_json::Value>)],
+) {
+    let Some(harnesses) = catalog["harnesses"].as_array_mut() else {
+        return;
+    };
+    for harness in harnesses {
+        if let Some((_, rows)) = choices.iter().find(|(id, _)| harness["id"] == id.as_str()) {
+            harness["accounts"] = serde_json::Value::Array(rows.clone());
+        }
+    }
+}
 pub(crate) fn install(store: Database, cx: &mut App) {
     if get(cx).is_some() {
         return;
@@ -314,6 +366,51 @@ impl Accounts {
     }
     pub(crate) fn selected(&self, kind: Kind, project: &str) -> Profile {
         self.profile(&self.book.selected(kind, project))
+    }
+    /// The account a delegated launch named. Unknown names and accounts whose
+    /// usage is known to be exhausted are errors; the caller never silently
+    /// receives a different account.
+    pub(crate) fn launch_account(
+        &self,
+        kind: Kind,
+        wanted: &str,
+    ) -> Result<(Profile, String), String> {
+        let account = self.book.find(kind, wanted)?;
+        let status = self.status(kind, &account.id);
+        if status.tone == Tone::Exhausted {
+            return Err(format!(
+                "{} is at its usage limit{}; choose another account",
+                account.label,
+                status.detail.map(|d| format!(" ({d})")).unwrap_or_default()
+            ));
+        }
+        Ok((self.profile(&account.id), account.label))
+    }
+    /// Accounts a delegated launch may name, with their current usage state.
+    pub(crate) fn launch_choices(&self, kind: Kind, current: &str) -> Vec<serde_json::Value> {
+        self.book
+            .list(kind)
+            .into_iter()
+            .map(|a| {
+                let status = self.status(kind, &a.id);
+                serde_json::json!({
+                    "id": a.id,
+                    "label": a.label,
+                    "current": a.id == current,
+                    "status": status.label,
+                    "detail": status.detail,
+                })
+            })
+            .collect()
+    }
+    /// Display name for an account ID, for launch receipts.
+    pub(crate) fn label(&self, kind: Kind, id: &str) -> String {
+        self.book
+            .list(kind)
+            .into_iter()
+            .find(|a| a.id == id)
+            .map(|a| a.label)
+            .unwrap_or_else(|| id.to_owned())
     }
     /// React's `accountStatus`: a tone, a word, and an optional detail.
     pub(crate) fn status(&self, kind: Kind, id: &str) -> Status {

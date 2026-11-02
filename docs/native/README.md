@@ -165,3 +165,22 @@ See [architecture](migration.md) for the crate boundaries and renderer patches,
 and [preview limitations](parity.md) for remaining work. The
 [session visuals guide](visuals.md) documents the agent-facing visual API and
 examples.
+
+## Prompt cache
+
+For Claude sessions the context meter's tooltip shows the prompt cache's age:
+how long it stays warm, or how long ago it expired. Claude Code keeps a
+conversation cached for an hour after its last request; after that the next
+message re-reads the whole conversation at full price. MonoCode estimates the
+age from the last request it saw (or the session's last update after a
+restart); it cannot ask the provider.
+
+Sending to a Claude chat of 50,000 tokens or more whose cache has expired
+first shows a choice: **Send anyway**, **Continue in a fresh chat** or
+**Cancel**. A fresh chat runs on the same account, model and checkout and
+starts from a handoff that the provider's small model writes from the old
+transcript (MonoCode's extractive recap if that fails), followed by your
+message. The original chat is left unchanged. **Send, and don't ask again for
+this chat** turns the check off for that conversation until the app restarts.
+Messages MonoCode sends itself, such as Operator completion reports, are not
+held.

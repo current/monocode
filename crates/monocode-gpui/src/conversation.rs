@@ -3,6 +3,7 @@ mod approvals;
 mod attachment_drop;
 mod background_tasks;
 mod btw;
+pub(crate) mod cold_cache;
 mod commands;
 pub(crate) mod composer_features;
 mod composer_shelf;
@@ -204,6 +205,12 @@ pub(crate) struct Conversation {
     preparing_worktree: bool,
     context: Option<monocode_core::context::Usage>,
     context_hovered: bool,
+    /// The expired-cache warning held over a send, if shown.
+    cold_prompt: Option<cold_cache::ColdPrompt>,
+    /// The user chose not to be warned again in this chat.
+    cold_ok: bool,
+    /// Let the next send through without re-checking.
+    cold_bypass: bool,
     menu: Option<OpenMenu>,
     add_anchor: AnchorSlot,
     model_anchor: AnchorSlot,
@@ -314,6 +321,18 @@ impl Conversation {
     }
     /// SessionCardPreview.tsx's compact model/status header and workspace details.
     /// Its latest message is saved as a draft, not sent (`session.draft`).
+    /// Prompt-cache state of this conversation, where its lifetime is known.
+    pub(crate) fn cache_state(&self) -> Option<monocode_core::context::Cache> {
+        let usage = self.context?;
+        monocode_core::context::cache(
+            &self.summary.provider,
+            usage.used,
+            usage
+                .at
+                .or(Some(self.summary.updated_at).filter(|t| *t > 0)),
+            monocode_core::time::now_ms(),
+        )
+    }
     pub(crate) fn has_saved_draft(&self) -> bool {
         if self.loaded {
             self.follow_ups.state.draft.is_some()
@@ -517,10 +536,12 @@ impl Conversation {
             this.open_typed_btw(cx);
         });
         input.update(cx, |input, _| input.set_alternate_submit(true));
-        let submission = cx.subscribe(&input, |this, _, _: &input::Submitted, cx| this.send(cx));
+        let submission = cx.subscribe(&input, |this, _, _: &input::Submitted, cx| {
+            this.user_send(false, cx)
+        });
         let alternate_submission = cx
             .subscribe(&input, |this, _, _: &input::AlternateSubmitted, cx| {
-                this.send_follow_up(true, cx)
+                this.user_send(true, cx)
             });
         let review =
             cx.new(|_| crate::session_review::SessionReview::new(summary.id, summary.cwd.clone()));
@@ -652,6 +673,9 @@ impl Conversation {
             preparing_worktree: false,
             context: None,
             context_hovered: false,
+            cold_prompt: None,
+            cold_ok: false,
+            cold_bypass: false,
             menu: None,
             add_anchor: AnchorSlot::default(),
             model_anchor: AnchorSlot::default(),
@@ -3093,6 +3117,7 @@ impl Conversation {
                 monocode_core::context::format_tokens(usage.window.unwrap_or(0))
             )
         });
+        let cache = self.cache_state();
         div()
             .min_w_0()
             .flex()
@@ -3188,7 +3213,8 @@ impl Conversation {
                                     cx.notify();
                                 }))
                                 .child(crate::context_meter::ring(ratio.unwrap_or(0.)))
-                                .when(self.context_hovered, |d| {
+                                .when_some(self.render_cold_prompt(cx), |d, card| d.child(card))
+                                .when(self.context_hovered && self.cold_prompt.is_none(), |d| {
                                     d.child(
                                         popover(
                                             "context-tooltip",
@@ -3212,6 +3238,22 @@ impl Conversation {
                                                             .text_size(px(11.))
                                                             .text_color(content(0.5))
                                                             .child(detail),
+                                                    )
+                                                })
+                                                .when_some(cache, |d, cache| {
+                                                    d.child(
+                                                        div()
+                                                            .id("context-cache")
+                                                            .pt(px(4.))
+                                                            .text_size(px(11.))
+                                                            .text_color(content(
+                                                                if cache.costly() {
+                                                                    0.8
+                                                                } else {
+                                                                    0.5
+                                                                },
+                                                            ))
+                                                            .child(cache.describe()),
                                                     )
                                                 }),
                                         ),
@@ -3265,7 +3307,7 @@ impl Conversation {
                 } else {
                     modifiers.control
                 };
-                this.send_follow_up(alternate, cx);
+                this.user_send(alternate, cx);
             }
         }))
     }

@@ -1956,3 +1956,67 @@ fn habits_and_documents_search_like_sessions(cx: &mut TestAppContext) {
     assert!(visual.debug_bounds("mono-document-plan").is_none());
     assert!(visual.debug_bounds("mono-document-summary").is_some());
 }
+
+#[gpui::test]
+fn delegated_launch_runs_on_the_named_account_or_fails(cx: &mut TestAppContext) {
+    let s = setup(cx);
+    cx.update(|cx| {
+        crate::accounts::get(cx).unwrap().update(cx, |center, _| {
+            for (id, label) in [
+                ("t3-claude-alt-3", "Claude Alt 3"),
+                ("t3-claude-alt-4", "Claude Alt 4"),
+            ] {
+                center.book.accounts.push(monocode_core::accounts::Account {
+                    id: id.into(),
+                    provider: "claude".into(),
+                    label: label.into(),
+                });
+            }
+        })
+    });
+    let started = call(
+        &s,
+        "named-account",
+        "sessions.start",
+        json!({"project":s.project,"prompt":"Work on Alt 3","harness":"claude","account":"claude alt 3","draft":true}),
+        cx,
+    )
+    .try_recv()
+    .unwrap()
+    .unwrap();
+    assert_eq!(started["account"], "Claude Alt 3");
+    let child = started["sessionId"].as_i64().unwrap();
+    cx.update(|cx| {
+        let owner = s.manager.read(cx).owner.upgrade().unwrap();
+        let view = owner.read(cx).mono_session_entity(child).unwrap();
+        assert_eq!(view.read(cx).settings.account.id, "t3-claude-alt-3");
+    });
+    let unknown = call(
+        &s,
+        "unknown-account",
+        "sessions.start",
+        json!({"project":s.project,"prompt":"x","harness":"claude","account":"Claude Alt 9","draft":true}),
+        cx,
+    )
+    .try_recv()
+    .unwrap()
+    .unwrap_err();
+    assert!(unknown.contains("Unknown claude account"), "{unknown}");
+    let models = call(&s, "models", "models.list", json!({}), cx)
+        .try_recv()
+        .unwrap()
+        .unwrap();
+    let claude = models["harnesses"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|h| h["id"] == "claude")
+        .unwrap();
+    let labels: Vec<_> = claude["accounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["label"].as_str().unwrap().to_owned())
+        .collect();
+    assert!(labels.contains(&"Claude Alt 4".to_owned()), "{labels:?}");
+}

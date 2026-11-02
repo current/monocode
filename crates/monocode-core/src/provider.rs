@@ -912,11 +912,15 @@ impl Protocol {
                         if metrics.reported() {
                             events.push(Event::Metrics(metrics));
                         }
-                        let last = v["usage"]["iterations"]
+                        // The result's top-level usage sums every request in
+                        // the turn (each re-reading the cached context), so it
+                        // can be many times the window. Only the last
+                        // iteration is the current context; without it, keep
+                        // the per-message figure already reported.
+                        let used = v["usage"]["iterations"]
                             .as_array()
                             .and_then(|iterations| iterations.last())
-                            .unwrap_or(&v["usage"]);
-                        let used = crate::context::claude_used(last);
+                            .and_then(crate::context::claude_used);
                         let window = v["modelUsage"]
                             .as_object()
                             .into_iter()
@@ -1910,6 +1914,13 @@ mod tests {
         assert!(events.contains(&Event::Context {
             used: Some(2050),
             window: Some(200000)
+        }));
+        // Without iterations the turn total (7.2M across many cached tool
+        // calls) must not replace the per-message context size.
+        let events = claude.frame(json!({"type":"result","usage":{"input_tokens":12000,"cache_read_input_tokens":7200000,"output_tokens":9000},"modelUsage":{"model":{"contextWindow":1000000}}}),&mut Vec::new()).unwrap();
+        assert!(events.contains(&Event::Context {
+            used: None,
+            window: Some(1000000)
         }));
     }
     #[test]

@@ -296,6 +296,56 @@ impl Book {
     pub fn exists(&self, kind: Kind, id: &str) -> bool {
         self.list(kind).iter().any(|a| a.id == id)
     }
+    /// Resolve an account a caller named for a delegated launch. Matches the
+    /// exact ID first, then the ID or label ignoring case, spaces and
+    /// punctuation ("Claude Alt 3", "claude-alt-3"). Never falls back to
+    /// another account: an unknown or ambiguous name is an error that lists
+    /// the valid choices.
+    pub fn find(&self, kind: Kind, wanted: &str) -> Result<Account, String> {
+        let rows = self.list(kind);
+        let choices = || {
+            rows.iter()
+                .map(|a| format!("\"{}\" (id {})", a.label, a.id))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        if rows.is_empty() {
+            return Err(format!("{} does not support account selection", kind.id()));
+        }
+        let wanted = wanted.trim();
+        if let Some(exact) = rows.iter().find(|a| a.id == wanted) {
+            return Ok(exact.clone());
+        }
+        let key = |s: &str| {
+            s.chars()
+                .filter(|c| c.is_alphanumeric())
+                .flat_map(char::to_lowercase)
+                .collect::<String>()
+        };
+        let target = key(wanted);
+        if target.is_empty() {
+            return Err(format!(
+                "Account name is empty. Choose one of: {}",
+                choices()
+            ));
+        }
+        let hits: Vec<_> = rows
+            .iter()
+            .filter(|a| key(&a.label) == target || key(&a.id) == target)
+            .collect();
+        match hits.as_slice() {
+            [one] => Ok((*one).clone()),
+            [] => Err(format!(
+                "Unknown {} account \"{wanted}\". Choose one of: {}",
+                kind.id(),
+                choices()
+            )),
+            _ => Err(format!(
+                "Account name \"{wanted}\" is ambiguous; use the account id. Choices: {}",
+                choices()
+            )),
+        }
+    }
     pub fn remove(&mut self, kind: Kind, id: &str) -> Result<(), String> {
         if id == DEFAULT || !self.exists(kind, id) {
             return Err("This account cannot be removed".into());

@@ -103,6 +103,9 @@ impl Shell {
                                 .insert(id, settings.worktree_cwd.clone());
                             this.add(summary, cx);
                             this.started_by.insert(id, call.session);
+                            if call.input["notifyOnComplete"].as_bool().unwrap_or(!draft) {
+                                this.track_operator_launch(id, call.session, cx);
+                            }
                             if let Some(view) = this.sessions.get(&id) {
                                 view.update(cx, |v, cx| v.install_app_launch(settings, !draft, cx));
                             }
@@ -346,9 +349,14 @@ impl Shell {
                         (kind, profile)
                     })
                     .collect();
+                let choices = crate::accounts::launch_choices_for(&profiles, cx);
                 self.app_background(
                     call,
-                    move |_| Ok((app::models_catalog(profiles)?, Effect::None)),
+                    move |_| {
+                        let mut catalog = app::models_catalog(profiles)?;
+                        crate::accounts::attach_choices(&mut catalog, &choices);
+                        Ok((catalog, Effect::None))
+                    },
                     cx,
                 );
                 return;
@@ -365,9 +373,11 @@ impl Shell {
                             .map(|center| center.read(cx).selected(kind, &project))
                             .unwrap_or_default();
                     }
-                    Ok::<_, String>((prompt, kind, placement, settings))
+                    let account =
+                        crate::accounts::apply_launch_account(&input, kind, &mut settings, cx)?;
+                    Ok::<_, String>((prompt, kind, placement, settings, account))
                 })();
-                let (prompt, kind, placement, settings) = match parsed {
+                let (prompt, kind, placement, settings, account) = match parsed {
                     Ok(p) => p,
                     Err(e) => {
                         self.finish_app_call(call, Err(e), cx);
@@ -395,7 +405,7 @@ impl Shell {
                         summary.has_messages=true;
                     }
                     let draft=input["draft"].as_bool().unwrap_or(false);let reveal=input["reveal"].as_bool().unwrap_or(false);
-                    let value=json!({"id":summary.id,"sessionId":summary.id,"cwd":project,"harness":kind.id(),"model":settings.model,"submitted":!draft,"draft":draft,"accepted":true});
+                    let value=json!({"id":summary.id,"sessionId":summary.id,"cwd":project,"harness":kind.id(),"account":account,"model":settings.model,"submitted":!draft,"draft":draft,"accepted":true});
                     Ok((value,if fresh {Effect::Start(Box::new((summary,settings,draft,reveal,placement)))}else{Effect::None}))
                 },cx);
                 return;
@@ -433,6 +443,12 @@ impl Shell {
                     }) {
                     Err(e) => Err(e),
                     Ok((id, view)) => {
+                        if matches!(
+                            action.as_str(),
+                            "sessions.stop" | "sessions.archive" | "sessions.delete"
+                        ) {
+                            self.dismiss_operator_launch(id, cx);
+                        }
                         if action == "sessions.delete" {
                             self.delete_session(id, window, cx);
                             if !self.deleting.contains(&id) {

@@ -476,6 +476,21 @@ impl Store {
     pub fn save_started_link(&self, child: i64, caller: i64) -> Result<(), String> {
         self.save_setting(&format!("started-by:{child}"), &caller.to_string())
     }
+    /// Sessions an /operator thread started whose completion report it has not
+    /// received yet: child session ID to the lead that started it.
+    pub fn operator_reports(&self) -> Result<std::collections::HashMap<i64, i64>, String> {
+        Ok(self
+            .setting("operator-reports")?
+            .and_then(|raw| serde_json::from_str(&raw).ok())
+            .unwrap_or_default())
+    }
+    pub fn save_operator_reports(
+        &self,
+        pending: &std::collections::HashMap<i64, i64>,
+    ) -> Result<(), String> {
+        let value = serde_json::to_string(pending).map_err(|e| e.to_string())?;
+        self.save_setting("operator-reports", &value)
+    }
     /// Every lead's last orchestration summary.
     pub fn orchestration_summaries(
         &self,

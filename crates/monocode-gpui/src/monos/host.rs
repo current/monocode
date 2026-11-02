@@ -277,7 +277,7 @@ impl Monos {
             .cloned();
         let result = match action.as_str() {
             "models.list" => {
-                let profiles = Kind::ALL
+                let profiles: Vec<_> = Kind::ALL
                     .into_iter()
                     .map(|kind| {
                         let profile = source
@@ -292,10 +292,15 @@ impl Monos {
                         (kind, profile)
                     })
                     .collect();
+                let choices = crate::accounts::launch_choices_for(&profiles, cx);
                 self.call_work(
                     call,
                     target,
-                    move |_| Ok((app::models_catalog(profiles)?, Effect::None)),
+                    move |_| {
+                        let mut catalog = app::models_catalog(profiles)?;
+                        crate::accounts::attach_choices(&mut catalog, &choices);
+                        Ok((catalog, Effect::None))
+                    },
                     cx,
                 );
                 return;
@@ -328,21 +333,32 @@ impl Monos {
                             .map(|center| center.read(cx).selected(kind, &project))
                             .unwrap_or_default();
                     }
+                    let account =
+                        crate::accounts::apply_launch_account(&input, kind, &mut settings, cx)?;
                     let placement = self
                         .owner
                         .update(cx, |owner, cx| {
                             owner.app_placement(&input, call.session, &project, cx)
                         })
                         .map_err(|e| e.to_string())??;
-                    Ok::<_, String>((prompt, provider, kind, source_provider, settings, placement))
+                    Ok::<_, String>((
+                        prompt,
+                        provider,
+                        kind,
+                        source_provider,
+                        settings,
+                        placement,
+                        account,
+                    ))
                 })();
-                let (prompt, provider, kind, source_provider, settings, placement) = match parsed {
-                    Ok(value) => value,
-                    Err(error) => {
-                        self.finish_call(call, Err(error), cx);
-                        return;
-                    }
-                };
+                let (prompt, provider, kind, source_provider, settings, placement, account) =
+                    match parsed {
+                        Ok(value) => value,
+                        Err(error) => {
+                            self.finish_call(call, Err(error), cx);
+                            return;
+                        }
+                    };
                 let draft = flag(&input, "draft", false);
                 let request = call.request_id.clone();
                 self.call_work(
@@ -378,7 +394,7 @@ impl Monos {
                         db.prepare_app_prompt(summary.id, &request, &prompt)?;
                         summary.has_messages = true;
                         Ok((
-                            json!({"sessionId":summary.id,"accepted":true,"project":project}),
+                            json!({"sessionId":summary.id,"accepted":true,"project":project,"harness":provider,"account":account}),
                             Effect::Start(summary, Box::new(settings), prompt, draft, placement),
                         ))
                     },

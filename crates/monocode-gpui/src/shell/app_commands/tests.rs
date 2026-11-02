@@ -665,3 +665,70 @@ fn app_launch_submission_uses_the_saved_message_identity(cx: &mut TestAppContext
         })
         .unwrap();
 }
+
+#[gpui::test]
+fn operator_leads_get_one_report_after_their_whole_batch_stops(cx: &mut TestAppContext) {
+    let (window, _, caller) = setup(cx);
+    let first = launch(window, caller, "first", json!({}), cx);
+    let second = launch(window, caller, "second", json!({}), cx);
+    let dismissed = launch(window, caller, "third", json!({}), cx);
+    window
+        .update(cx, |shell, _, cx| {
+            // Draft launches never report on their own.
+            assert!(shell.operator_pending().is_empty());
+            shell.sessions[&caller].update(cx, |v, _| v.summary.provider = "fixture".into());
+            for child in [first, second, dismissed] {
+                shell.track_operator_launch(child, caller, cx);
+            }
+            shell.sessions[&first].update(cx, |v, _| v.busy = true);
+            shell.check_operator_reports(cx);
+            assert_eq!(shell.operator_pending().len(), 3, "first is still working");
+            shell.sessions[&first].update(cx, |v, _| v.busy = false);
+            shell.check_operator_reports(cx);
+            assert_eq!(
+                shell.operator_pending().len(),
+                3,
+                "second has not started its turn yet"
+            );
+            shell.sessions[&second].update(cx, |v, _| v.busy = true);
+            shell.check_operator_reports(cx);
+            shell.sessions[&second].update(cx, |v, _| v.busy = false);
+        })
+        .unwrap();
+    // The lead stopping a child itself means it needs no report for it.
+    call(
+        window,
+        caller,
+        "stop",
+        "sessions.stop",
+        json!({"sessionId":dismissed}),
+        cx,
+    )
+    .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |shell, _, _| {
+            assert!(shell.operator_pending().is_empty(), "report was delivered");
+            assert!(
+                locked(&shell.store)
+                    .unwrap()
+                    .operator_reports()
+                    .unwrap()
+                    .is_empty()
+            );
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |shell, _, _| {
+            let rows = locked(&shell.store).unwrap().load(caller).unwrap().rows;
+            let report = rows
+                .iter()
+                .find(|r| r.text.contains("[Delegated work completed]"))
+                .expect("the report is saved as the lead's next message");
+            assert!(report.text.contains(&format!("Session {first}")));
+            assert!(report.text.contains(&format!("Session {second}")));
+            assert!(!report.text.contains(&format!("Session {dismissed}")));
+        })
+        .unwrap();
+}
