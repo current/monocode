@@ -9,6 +9,37 @@ const session = "fixture-claude";
 if (process.argv.includes("--no-session-persistence") && !process.argv.includes("--session-id"))
   send({ type: "system", subtype: "init", session_id: session });
 let turn = 0;
+
+function delegate(request) {
+  const content = request.message?.content;
+  const text = typeof content === "string"
+    ? content
+    : Array.isArray(content) ? content.map((part) => part.text ?? "").join("") : "";
+  if (!text.includes("FIXTURE_DELEGATE")) return false;
+  let reply;
+  if (!process.env.MONOCODE) reply = "No app access in this session.";
+  else {
+    const { execFileSync } = require("node:child_process");
+    const ids = [1, 2].map((n) =>
+      JSON.parse(
+        execFileSync(process.env.MONOCODE, [
+          "app",
+          "sessions.start",
+          "--json",
+          JSON.stringify({ prompt: `Fixture worker ${n}`, title: `Worker ${n}` }),
+        ], { encoding: "utf8" }),
+      ).sessionId,
+    );
+    reply = `Started ${ids.join(" and ")}.`;
+  }
+  send({
+    type: "assistant",
+    session_id: session,
+    message: { id: `msg_${turn + 1}_d`, role: "assistant", content: [{ type: "text", text: reply }] },
+  });
+  send({ type: "result", subtype: "success", session_id: session, result: "done" });
+  return true;
+}
 readline.createInterface({ input: process.stdin }).on("line", (line) => {
   let request;
   try {
@@ -34,6 +65,10 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
     });
   } else if (request.type === "control_request") {
     send({ type: "control_response", response: { subtype: "success", request_id: request.request_id } });
+  } else if (request.type === "user" && delegate(request)) {
+    // Operator end-to-end test: a lead starts two workers through the
+    // host's app CLI, then ends its turn (host/operator-e2e.test.ts).
+    ++turn;
   } else if (request.type === "user") {
     const id = `toolu_fixture_${++turn}`;
     setTimeout(() => {

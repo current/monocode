@@ -14,6 +14,7 @@ import {
 } from "../src/features/connections/model/protocol";
 import { HostEngine } from "./engine";
 import { hostAccountUsage } from "./accounts";
+import type { HostAppAccess } from "./app-access";
 import { writeAttachmentChunk, readAttachmentChunk } from "./attachments";
 import type { LinkedWorkItem } from "../src/features/sessions/model/session";
 import { parseGithubWorkItemUrl } from "../src/features/sessions/model/sessionWorkItem";
@@ -136,6 +137,8 @@ export function createHostServer(
   engine: HostEngine,
   providers: RemoteProvider[],
   lifecycle?: (request: IncomingMessage, response: ServerResponse) => void,
+  /** Operator app calls from lead sessions on this host (`POST /app`). */
+  app?: HostAppAccess,
 ) {
   const catalogs = new Map<
     string,
@@ -192,11 +195,16 @@ export function createHostServer(
     }
     return catalog;
   };
+  app?.useModels((projectId) => models(projectId));
   return createServer(
     { requestTimeout: 20_000, headersTimeout: 10_000, maxHeaderSize: 8192 },
     async (request, response) => {
       if (request.url === "/lifecycle" && lifecycle) {
         lifecycle(request, response);
+        return;
+      }
+      if (request.url === "/app" && app) {
+        await app.serve(request, response);
         return;
       }
       response.setHeader("Content-Type", "application/json");
@@ -252,6 +260,10 @@ export function createHostServer(
           !Array.isArray(input.params)
             ? (input.params as Record<string, unknown>)
             : {};
+        // Lead-only `app.*` methods are served on POST /app with a session
+        // token, never to a device credential (or the browser desk).
+        if (typeof input.method === "string" && input.method.startsWith("app."))
+          throw new Error("App methods are only available to operator sessions");
         let result: unknown;
         switch (input.method) {
           case "environment.describe":
@@ -377,7 +389,7 @@ export function createHostServer(
             const current = engine.store.session(sessionId);
             if (current.projectId !== params.projectId)
               throw new Error("Session does not belong to this project");
-            engine.store.deleteSession(sessionId);
+            engine.deleteSession(sessionId);
             result = { deleted: true };
             break;
           }

@@ -19,6 +19,7 @@ import {
 } from "../src/features/connections/model/protocol";
 import { providerLaunch, resolveProvider } from "./process";
 import { accountSpawnEnv } from "./accounts";
+import { childEnv } from "./session-env";
 
 const exec = promisify(execFile);
 const ALLOWED_EXEC_ARGS: readonly (readonly string[])[] = [
@@ -359,7 +360,7 @@ export class HostChildBackend implements ChildBackend {
         stdio: ["pipe", "pipe", "pipe", "pipe"],
         detached: process.platform !== "win32",
         windowsHide: true,
-        env: { ...process.env, MONOCODE_HOST: "1", ...accountEnvironment },
+        env: { ...childEnv(id), ...accountEnvironment },
       },
     );
     this.children.set(id, child);
