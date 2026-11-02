@@ -145,6 +145,7 @@ import { useComposerSkills } from "./useComposerSkills";
 import { Popover } from "../../../shared/ui/Popover";
 import { UsageLimitNotice } from "./UsageLimitNotice";
 import { UsageLimitAccountPicker } from "./UsageLimitAccountPicker";
+import { HostAccountPicker } from "./HostAccountPicker";
 import { consumePlanCommand, PLAN_COMMAND } from "../model/plan";
 import {
   consumeOperatorCommand,
@@ -2386,7 +2387,7 @@ export function Composer({
                 if (
                   e.target instanceof Element &&
                   e.target.closest(
-                    "[data-model-picker], [data-model-control], [data-access-picker], [data-model-settings]",
+                    "[data-model-picker], [data-model-control], [data-access-picker], [data-host-account-picker], [data-model-settings]",
                   )
                 ) {
                   return;
@@ -2409,6 +2410,10 @@ export function Composer({
                   onSettingsChange={(settings) =>
                     onModelSettingsChange?.(settings)
                   }
+                  onClose={() => ref.current?.focus()}
+                />
+                <HostAccountPicker
+                  harness={harness}
                   onClose={() => ref.current?.focus()}
                 />
                 {controlsBeside ? (

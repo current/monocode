@@ -18,6 +18,7 @@ import {
   type RemoteProvider,
 } from "../src/features/connections/model/protocol";
 import { providerLaunch, resolveProvider } from "./process";
+import { accountSpawnEnv } from "./accounts";
 
 const exec = promisify(execFile);
 const ALLOWED_EXEC_ARGS: readonly (readonly string[])[] = [
@@ -325,11 +326,14 @@ export class HostChildBackend implements ChildBackend {
     if (this.closing) throw new Error("Host is stopping");
     await this.kill(id);
     if (this.closing) throw new Error("Host is stopping");
-    const account = args.account as { id?: string } | undefined;
-    if (account?.id && account.id !== "default")
-      throw new Error(
-        "Named provider accounts are not supported by this host yet",
-      );
+    const account = args.account as
+      | { provider?: string; id?: string }
+      | undefined;
+    // A named account runs its CLI against that account's private home.
+    const accountEnvironment = accountSpawnEnv(
+      account?.provider ?? args.binaryProvider,
+      account?.id,
+    );
     let commandArgs = args.args as string[];
     if (args.devinAskEdits) {
       if (
@@ -355,7 +359,7 @@ export class HostChildBackend implements ChildBackend {
         stdio: ["pipe", "pipe", "pipe", "pipe"],
         detached: process.platform !== "win32",
         windowsHide: true,
-        env: { ...process.env, MONOCODE_HOST: "1" },
+        env: { ...process.env, MONOCODE_HOST: "1", ...accountEnvironment },
       },
     );
     this.children.set(id, child);

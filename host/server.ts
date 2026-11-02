@@ -13,6 +13,7 @@ import {
   type RemoteProvider,
 } from "../src/features/connections/model/protocol";
 import { HostEngine } from "./engine";
+import { hostAccountUsage } from "./accounts";
 import { writeAttachmentChunk, readAttachmentChunk } from "./attachments";
 import type { LinkedWorkItem } from "../src/features/sessions/model/session";
 import { parseGithubWorkItemUrl } from "../src/features/sessions/model/sessionWorkItem";
@@ -304,9 +305,16 @@ export function createHostServer(
           case "projects.open":
             result = await engine.openProject(String(params.cwd ?? ""));
             break;
-          case "models.list":
-            result = await models(params.projectId);
+          case "models.list": {
+            // Accounts have their own 5-minute usage cache; the catalog
+            // object is shared, so it is copied rather than extended.
+            const [catalog, accounts] = await Promise.all([
+              models(params.projectId),
+              hostAccountUsage(),
+            ]);
+            result = { ...catalog, ...accounts };
             break;
+          }
           case "sessions.list": {
             const projectId = String(params.projectId ?? "");
             const project = engine.store.project(projectId);

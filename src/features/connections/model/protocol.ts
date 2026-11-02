@@ -35,6 +35,36 @@ export type HostDirectory = {
 export type HostModelCatalog = {
   models: Partial<Record<RemoteProvider, AgentModel[]>>;
   errors: Partial<Record<RemoteProvider, string>>;
+  /** Named subscription logins the host can run sessions under. Absent when
+   * the host has no account registry; then every session uses its default
+   * login. */
+  accounts?: HostAccount[];
+  /** Why the host's account registry could not be read. */
+  accountsError?: string;
+};
+/** One usage window of a provider account, 0-100 percent used. */
+export type HostAccountWindow = {
+  usedPercent: number;
+  /** Unix milliseconds. */
+  resetsAt?: number;
+};
+/** A named Claude or Codex login on the host. Credentials never leave it. */
+export type HostAccount = {
+  id: string;
+  label: string;
+  harness: "claude" | "codex";
+  /**
+   * `ok`: usage known and below the limit. `idle`: the saved token expired;
+   * the CLI refreshes it on next use. `exhausted`: a window is at its limit.
+   * `unknown`: usage could not be read. `disconnected`: no login saved.
+   */
+  state: "ok" | "idle" | "exhausted" | "unknown" | "disconnected";
+  /** Short human reason for any state other than `ok`. */
+  detail?: string;
+  fiveHour?: HostAccountWindow;
+  weekly?: HostAccountWindow;
+  /** Unix milliseconds the usage was read. */
+  checkedAt: number;
 };
 export type HostWorktree = {
   path: string;
@@ -152,6 +182,8 @@ export type HostCommand =
       model: string;
       modelSettings?: Record<string, string>;
       runtimeMode: RuntimeMode;
+      /** Host account ID or label; absent = the host's default login. */
+      account?: string;
     }
   | {
       type: "configure";
@@ -160,6 +192,8 @@ export type HostCommand =
       model: string;
       modelSettings: Record<string, string>;
       runtimeMode: RuntimeMode;
+      /** Host account ID or label; null = default login; absent = unchanged. */
+      account?: string | null;
     }
   | { type: "compact"; commandId: string; sessionId: string }
   | {

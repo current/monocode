@@ -72,6 +72,8 @@ type Configuration = {
   model: string;
   settings: Record<string, string>;
   mode: RuntimeMode;
+  /** Host account ID; undefined is the host's default login. */
+  account?: string;
 };
 
 type OptimisticTurn = {
@@ -502,6 +504,7 @@ function ConnectedRemoteSession({
     model: hostSession.model,
     settings: hostSession.modelSettings ?? {},
     mode: hostSession.runtimeMode,
+    account: hostSession.providerAccountId,
   };
   const configuration = saved ? (changes ?? saved) : draft;
   const updateConfiguration = (
@@ -690,6 +693,7 @@ function ConnectedRemoteSession({
     const same = (a: Configuration, b: Configuration) =>
       a.model === b.model &&
       a.mode === b.mode &&
+      a.account === b.account &&
       sameModelSettings(a.settings, b.settings);
     if (same(changes, saved)) {
       applied.current = undefined;
@@ -707,6 +711,9 @@ function ConnectedRemoteSession({
       model: changes.model,
       modelSettings: changes.settings,
       runtimeMode: changes.mode,
+      ...(changes.account !== saved.account
+        ? { account: changes.account ?? null }
+        : {}),
     })
       .then((receipt) => {
         if (receipt) applied.current = sent;
@@ -801,6 +808,7 @@ function ConnectedRemoteSession({
         model: draft.model,
         modelSettings: draft.settings,
         runtimeMode: draft.mode,
+        ...(draft.account ? { account: draft.account } : {}),
       }, turn, followup);
       if (version !== bindingVersion.current) return;
       if (!receipt) {
@@ -909,6 +917,10 @@ function ConnectedRemoteSession({
   };
 
 
+  const accountLocked = !!hostSession?.blocks.some((block) => !block.draft);
+  // The memoized source must apply a choice to the latest pending changes.
+  const latestUpdate = useRef(updateConfiguration);
+  latestUpdate.current = updateConfiguration;
   const modelSource = useMemo<ModelSource>(() => {
     const models = (harness: HarnessId) =>
       catalog?.models[harness as RemoteProvider] ?? [];
@@ -950,8 +962,24 @@ function ConnectedRemoteSession({
       // The host re-probes when a provider CLI changes or its catalog ages,
       // so each picker opening asks again.
       refresh: () => setCatalogRefresh((value) => value + 1),
+      ...(catalog?.accounts?.length
+        ? {
+            accounts: {
+              list: catalog.accounts,
+              selected: configuration.account,
+              // The provider conversation lives in the account's home.
+              lockedReason: accountLocked
+                ? "This session already ran on this account. Start a new session to use another."
+                : undefined,
+              select: (account: string | undefined) =>
+                latestUpdate.current((current) => ({ ...current, account })),
+            },
+          }
+        : {}),
     };
   }, [
+    configuration.account,
+    accountLocked,
     catalog,
     catalogError,
     descriptor,
@@ -1208,6 +1236,8 @@ function ConnectedRemoteSession({
         ...current,
         harness,
         model,
+        // Accounts belong to one harness.
+        account: harness === current.harness ? current.account : undefined,
         settings: carryModelSettings(
           modelSource.resolve(harness, model).settings ?? [],
           current.settings,

@@ -32,6 +32,7 @@ import {
 import type { HostProvider } from "./providers";
 import { HostStore } from "./store";
 import { parseRemoteAttachments, resolveAttachments } from "./attachments";
+import { resolveAccount } from "./accounts";
 
 // Streamed output is written in batches. Anything a user may need to act on
 // (approvals, questions, errors, completion) is written immediately.
@@ -108,6 +109,9 @@ export function parseCommand(input: unknown): HostCommand {
         ? { modelSettings: modelSettings(v.modelSettings) }
         : {}),
       runtimeMode: v.runtimeMode as Session["runtimeMode"],
+      ...(v.account !== undefined && v.account !== null
+        ? { account: text(v.account, "account") }
+        : {}),
     };
   }
   const sessionId = text(v.sessionId, "session ID");
@@ -121,6 +125,11 @@ export function parseCommand(input: unknown): HostCommand {
       model: text(v.model, "model", 200),
       modelSettings: modelSettings(v.modelSettings),
       runtimeMode: v.runtimeMode as Session["runtimeMode"],
+      ...(v.account === null
+        ? { account: null }
+        : v.account !== undefined
+          ? { account: text(v.account, "account") }
+          : {}),
     };
   }
   if (v.type === "compact") return { type: "compact", commandId, sessionId };
@@ -284,6 +293,7 @@ export class HostEngine {
           value.session.id,
           value.session.providerSessionId,
           value.session.cwd,
+          ...(value.session.providerAccountId ? [value.session.providerAccountId] : []),
         );
     }
   }
@@ -397,6 +407,7 @@ export class HostEngine {
               id,
               latest.session.providerSessionId,
               latest.session.cwd,
+              ...(latest.session.providerAccountId ? [latest.session.providerAccountId] : []),
             );
         } catch (error) {
           console.error(
@@ -429,6 +440,9 @@ export class HostEngine {
         if (this.switchingProjects.has(project.id))
           throw new Error("Wait for the branch switch to finish");
         this.provider(command.harness);
+        // Unknown, wrong-harness or exhausted accounts are refused, never
+        // replaced by another login.
+        const account = resolveAccount(command.harness, command.account);
         const cwd = resolveHostWorktree(project.cwd, command.worktreeCwd);
         const now = Date.now();
         value = {
@@ -445,6 +459,7 @@ export class HostEngine {
             model: command.model,
             runtimeMode: command.runtimeMode,
             modelSettings: command.modelSettings ?? {},
+            ...(account ? { providerAccountId: account.id } : {}),
             title: "New remote session",
             ...(command.autoWorktreeBranch
               ? { branch: command.autoWorktreeBranch, worktreeCwd: cwd }
@@ -465,10 +480,29 @@ export class HostEngine {
             throw new Error(
               "Wait for the current turn before changing settings",
             );
+          let providerAccountId = value.session.providerAccountId;
+          if (command.account !== undefined) {
+            const account = resolveAccount(
+              value.session.harness,
+              command.account,
+            );
+            const next = account?.id;
+            if (next !== providerAccountId) {
+              // Provider conversations live in the account's home; another
+              // account would silently start over without this context.
+              if (value.session.blocks.some((block) => !block.draft))
+                throw new Error(
+                  "This session already ran on its account. Start a new session to use another account.",
+                );
+              providerAccountId = next;
+            }
+          }
+          const { providerAccountId: _previous, ...rest } = value.session;
           value = {
             ...value,
             session: {
-              ...value.session,
+              ...rest,
+              ...(providerAccountId ? { providerAccountId } : {}),
               model: command.model,
               modelSettings: command.modelSettings,
               runtimeMode: command.runtimeMode,
@@ -717,10 +751,15 @@ export class HostEngine {
     generateTitle: boolean,
   ): void {
     const provider = this.provider(value.session.harness);
-    const { id, cwd, harness, title } = value.session;
+    const { id, cwd, harness, title, providerAccountId } = value.session;
     if (generateTitle && provider.generateTitle) {
       void provider
-        .generateTitle({ sessionId: id, cwd, message })
+        .generateTitle({
+          sessionId: id,
+          cwd,
+          message,
+          ...(providerAccountId ? { providerAccountId } : {}),
+        })
         .then((generated) => {
           if (!generated) return;
           this.flush(id);
@@ -797,6 +836,9 @@ export class HostEngine {
               model: session.model,
               modelSettings: session.modelSettings,
               runtimeMode: session.runtimeMode,
+              ...(session.providerAccountId
+                ? { providerAccountId: session.providerAccountId }
+                : {}),
               intent,
               onEvent: (event) => this.event(session.id, runId!, event),
             };
@@ -848,7 +890,12 @@ export class HostEngine {
         // provider conversation identity for an explicit future follow-up.
         const persisted = this.store.session(session.id).session;
         if (persisted.providerSessionId)
-          provider.bind(session.id, persisted.providerSessionId, persisted.cwd);
+          provider.bind(
+            session.id,
+            persisted.providerSessionId,
+            persisted.cwd,
+            ...(persisted.providerAccountId ? [persisted.providerAccountId] : []),
+          );
       })
       .catch((error) => {
         clearTimeout(this.live.get(session.id)?.timer);

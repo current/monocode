@@ -6,6 +6,7 @@ import {
   type AgentModel,
 } from "../model/models";
 import type { HarnessId } from "../model/session";
+import type { HostAccount } from "../../connections/model/protocol";
 import {
   hasProbedHarnessAvailability,
   isHarnessAvailable,
@@ -25,6 +26,18 @@ export type ModelSource = {
   probed(): boolean;
   /** Refresh availability and catalogs, when the source supports it. */
   refresh(harnesses: HarnessId[]): void;
+  /** Named logins a MonoCode host reported; absent everywhere else. */
+  accounts?: ModelSourceAccounts;
+};
+
+export type ModelSourceAccounts = {
+  /** Every account the host reported, with its usage. */
+  list: HostAccount[];
+  /** Selected account ID; undefined is the host's default login. */
+  selected?: string;
+  /** Why the account can no longer change, once the session has run. */
+  lockedReason?: string;
+  select(id: string | undefined): void;
 };
 
 export const LOCAL_MODEL_SOURCE: ModelSource = {
