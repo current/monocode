@@ -8,6 +8,7 @@ mod classic_sidebar;
 mod classic_surface_tests;
 mod classic_surfaces;
 mod continue_fresh;
+mod external_inbox;
 mod file_panes;
 mod idle_agents;
 #[cfg(test)]
@@ -1238,6 +1239,7 @@ impl Shell {
         this.monos = Some(monos);
         this.bind_notices(cx);
         this.init_app_bridge(cx);
+        this.start_external_inbox(cx);
         for summary in summaries {
             if this
                 .monos

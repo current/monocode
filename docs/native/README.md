@@ -184,3 +184,27 @@ message. The original chat is left unchanged. **Send, and don't ask again for
 this chat** turns the check off for that conversation until the app restarts.
 Messages MonoCode sends itself, such as Operator completion reports, are not
 held.
+
+## External inbox (other local tools)
+
+Tools that run shell commands for you on this computer (for example a desktop
+assistant) can post into Monocode Native without app access, similar to
+`t3 thread send`:
+
+```sh
+monocode-gpui inbox list  --project ~/code/app            # sessions with IDs
+monocode-gpui inbox send  --session 123 --from "Grok Bot" --text "status?"
+monocode-gpui inbox start --project ~/code/app --harness claude --account "Claude (alt-3)" \
+  --mode full-access --title "Fix login" --from "Grok Bot" --file brief.md
+monocode-gpui inbox read  --session 123 --limit 4          # recent messages, read-only
+monocode-gpui inbox status --id <requestId>
+```
+
+Requests are files in `<data>/external-inbox/pending` (owner-only permissions);
+the running app delivers them every two seconds and records the result in
+`done`. A message to a busy session, or one with unsent text in its composer,
+waits until the session is ready (up to six hours). `--from` labels the
+message in the chat. `start` uses the same account rules as `sessions.start`:
+an unknown or exhausted account is an error. Mono chats and orchestration
+workers do not accept inbox messages. Anyone who can run commands as you can
+use the inbox, the same trust as running the agent CLIs directly.

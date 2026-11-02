@@ -204,6 +204,21 @@ fn main() {
         }
         return;
     }
+    if cli_args.first().is_some_and(|a| a == "inbox") {
+        match monocode_core::external_inbox::client(&cli_args[1..]) {
+            Ok(value) => {
+                println!("{value}");
+                if value.get("ok") == Some(&serde_json::Value::Bool(false)) {
+                    std::process::exit(1);
+                }
+            }
+            Err(error) => {
+                println!("{}", serde_json::json!({"ok":false,"error":error}));
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
     if cli_args.first().is_some_and(|a| a == "app") {
         match monocode_core::mono::bridge::client(&cli_args[1..]) {
             Ok(value) => {

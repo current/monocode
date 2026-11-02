@@ -10,6 +10,7 @@ pub mod context;
 pub mod desktop_preferences;
 pub mod diff;
 pub mod external_editor;
+pub mod external_inbox;
 pub mod files;
 pub mod follow_up;
 pub mod git;
