@@ -11,19 +11,7 @@ pub(super) fn fetch_for(profile: &crate::accounts::Profile) -> Result<Snapshot, 
         FetchError::unavailable("Sign in with claude auth login, then refresh usage.")
     })?;
     let oauth = credentials.get("claudeAiOauth").unwrap_or(&credentials);
-    let token = oauth["accessToken"]
-        .as_str()
-        .filter(|s| !s.trim().is_empty())
-        .ok_or_else(|| FetchError::unavailable("Claude is not signed in."))?;
-    let expiry = oauth["expiresAt"]
-        .as_i64()
-        .or_else(|| oauth["expiresAt"].as_str()?.parse::<i64>().ok());
-    // The CLI owns its rotating refresh token. Never refresh or write it here.
-    if expiry.is_some_and(|at| at <= now_ms()) {
-        return Err(FetchError::unavailable(
-            "Claude sign-in expired. Run claude auth login, then refresh.",
-        ));
-    }
+    let token = access_token(&credentials, now_ms())?;
     let response = ureq::AgentBuilder::new()
         .timeout(Duration::from_secs(10))
         .build()
@@ -33,15 +21,7 @@ pub(super) fn fetch_for(profile: &crate::accounts::Profile) -> Result<Snapshot, 
         .set("User-Agent", "claude-code/2.1.0")
         .call()
         .map_err(|error| match error {
-            ureq::Error::Status(401, _) => FetchError::unavailable(
-                "Claude sign-in expired. Run claude auth login, then refresh.",
-            ),
-            ureq::Error::Status(403, _) => {
-                FetchError::unavailable("Claude usage is unavailable for this account.")
-            }
-            ureq::Error::Status(status, _) => {
-                FetchError::failed(format!("Claude usage request failed ({status})."))
-            }
+            ureq::Error::Status(status, _) => http_error(status, oauth, now_ms()),
             _ => FetchError::failed("Could not reach Claude usage. Try refreshing again."),
         })?;
     let mut body = String::new();
@@ -53,6 +33,51 @@ pub(super) fn fetch_for(profile: &crate::accounts::Profile) -> Result<Snapshot, 
     let value = serde_json::from_str(&body)
         .map_err(|_| FetchError::failed("Claude usage response was not JSON."))?;
     parse_claude(&value)
+}
+
+fn http_error(status: u16, oauth: &Value, now: i64) -> FetchError {
+    match status {
+        401 => expiry_error(oauth, now),
+        403 => FetchError::unavailable("Claude usage is unavailable for this account."),
+        _ => FetchError::failed(format!("Claude usage request failed ({status}).")),
+    }
+}
+
+fn access_token(credentials: &Value, now: i64) -> Result<&str, FetchError> {
+    let oauth = credentials.get("claudeAiOauth").unwrap_or(credentials);
+    let token = oauth["accessToken"]
+        .as_str()
+        .filter(|s| !s.trim().is_empty())
+        .ok_or_else(|| FetchError::unavailable("Claude is not signed in."))?;
+    if oauth["refreshToken"]
+        .as_str()
+        .is_none_or(|s| s.trim().is_empty())
+    {
+        return Err(FetchError::unavailable(
+            "Claude sign-in expired. Run claude auth login, then refresh.",
+        ));
+    }
+    let error = expiry_error(oauth, now);
+    if error.is_idle() {
+        return Err(error);
+    }
+    Ok(token)
+}
+
+fn expiry_error(oauth: &Value, now: i64) -> FetchError {
+    let expired = oauth["expiresAt"]
+        .as_i64()
+        .or_else(|| oauth["expiresAt"].as_str()?.parse::<i64>().ok())
+        .is_some_and(|at| at <= now);
+    if expired
+        && oauth["refreshToken"]
+            .as_str()
+            .is_some_and(|s| !s.trim().is_empty())
+    {
+        FetchError::failed("Refreshes on next use")
+    } else {
+        FetchError::unavailable("Claude sign-in expired. Run claude auth login, then refresh.")
+    }
 }
 
 fn config_dir() -> Option<PathBuf> {
@@ -182,6 +207,26 @@ fn keychain(config: Option<&std::path::Path>) -> Option<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn credential_and_http_states() {
+        let value = serde_json::json!({"claudeAiOauth": {"accessToken":"fake", "refreshToken":"fake", "expiresAt":100}});
+        assert!(access_token(&value, 100).unwrap_err().is_idle());
+        assert!(
+            access_token(&serde_json::json!({}), 100)
+                .unwrap_err()
+                .unavailable
+        );
+        assert!(
+            access_token(&serde_json::json!({"accessToken":"fake"}), 100)
+                .unwrap_err()
+                .unavailable
+        );
+        // A simulated HTTP 401 is classified at response time, including expiry in flight.
+        let fake_status = |status, now| http_error(status, &value["claudeAiOauth"], now);
+        assert!(fake_status(401, 99).unavailable);
+        assert!(fake_status(401, 99).message.contains("sign-in expired"));
+        assert!(fake_status(401, 100).is_idle());
+    }
     #[test]
     fn accepts_nested_and_legacy_credentials_without_logging_secrets() {
         assert!(

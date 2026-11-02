@@ -107,6 +107,10 @@ pub struct FetchError {
     pub unavailable: bool,
 }
 impl FetchError {
+    pub fn is_idle(&self) -> bool {
+        !self.unavailable && self.message == "Refreshes on next use"
+    }
+
     fn unavailable(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),

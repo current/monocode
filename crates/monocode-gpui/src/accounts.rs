@@ -244,6 +244,24 @@ pub(crate) struct Accounts {
 impl EventEmitter<AccountEvent> for Accounts {}
 impl Accounts {
     fn new(root: PathBuf, book: Book, store: Database, cx: &mut Context<Self>) -> Self {
+        let center = cx.entity().downgrade();
+        cx.observe_new::<crate::conversation::Conversation>(move |_, _, cx| {
+            let center = center.clone();
+            let busy = std::cell::Cell::new(false);
+            cx.observe_self(move |view, cx| {
+                let was_busy = busy.replace(view.busy);
+                if was_busy && !view.busy {
+                    let key = Key::new(
+                        Kind::from_id(&view.summary.provider),
+                        view.settings.account.clone(),
+                        view.account_model(),
+                    );
+                    let _ = center.update(cx, |this, cx| this.refresh(key, true, cx));
+                }
+            })
+            .detach();
+        })
+        .detach();
         let clock = cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor()
@@ -423,6 +441,13 @@ impl Accounts {
         let Some(state) = self.usage.get(&key) else {
             return checking;
         };
+        if state.error.as_ref().is_some_and(FetchError::is_idle) {
+            return Status {
+                tone: Tone::Unknown,
+                label: "Idle".into(),
+                detail: Some("Refreshes on next use".into()),
+            };
+        }
         let now = usage::now_ms();
         if let Some(snapshot) = &state.snapshot
             && let Some(headroom) = snapshot.headroom(now)
