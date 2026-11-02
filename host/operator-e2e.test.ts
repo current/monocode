@@ -70,7 +70,7 @@ it.skipIf(process.platform === "win32")(
       await wait(200);
     }
     const workers = sessions.filter((s) => s.id !== leadId);
-    expect(workers.map((s) => s.title).sort()).toEqual(["Worker 1", "Worker 2"]);
+    expect(workers.map((s) => s.title).sort()).toEqual(["Port the sidebar marks", "Review the pricing tests"]);
     for (const worker of workers) expect(worker.id.startsWith(`app-${leadId}-`)).toBe(true);
     // Give a duplicate report time to show up, if there were one.
     await wait(1_500);

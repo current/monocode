@@ -15,7 +15,13 @@ function delegate(request) {
   const text = typeof content === "string"
     ? content
     : Array.isArray(content) ? content.map((part) => part.text ?? "").join("") : "";
+  // A worker turn that starts with FIXTURE_HOLD stays working until stopped. Only
+  // at the start: the host's title prompt quotes the message after a preamble
+  // and runs on one shared process, which a hold there would block.
+  if (text.startsWith("FIXTURE_HOLD")) return true;
   if (!text.includes("FIXTURE_DELEGATE")) return false;
+  // FIXTURE_DELEGATE_HOLD keeps the second worker working (sidebar shots).
+  const hold = text.includes("FIXTURE_DELEGATE_HOLD");
   let reply;
   if (!process.env.MONOCODE) reply = "No app access in this session.";
   else {
@@ -26,7 +32,10 @@ function delegate(request) {
           "app",
           "sessions.start",
           "--json",
-          JSON.stringify({ prompt: `Fixture worker ${n}`, title: `Worker ${n}` }),
+          JSON.stringify({
+            prompt: `${hold && n === 2 ? "FIXTURE_HOLD " : ""}Fixture worker ${n}`,
+            title: n === 1 ? "Review the pricing tests" : "Port the sidebar marks",
+          }),
         ], { encoding: "utf8" }),
       ).sessionId,
     );
