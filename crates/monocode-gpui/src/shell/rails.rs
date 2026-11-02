@@ -734,6 +734,18 @@ impl Shell {
     }
     /// Forget a finished run's agent list. Its workers return to the session
     /// list and the lead's rail falls back to the sessions it started itself.
+    /// "See details" switches to the agent's chat (its own tab when it has
+    /// none) and remembers where it came from, so closing that tab with ⌘W
+    /// returns to the chat that opened it.
+    pub(super) fn open_from_rail(&mut self, id: i64, window: &mut Window, cx: &mut Context<Self>) {
+        let opener = self.workspace.active.filter(|active| *active != id);
+        self.open(id, window, cx);
+        if self.workspace.active == Some(id)
+            && let Some(opener) = opener
+        {
+            self.tab_openers.insert(id, opener);
+        }
+    }
     pub(super) fn clear_orchestration_summary(&mut self, lead: i64, cx: &mut Context<Self>) {
         if self.orchestrations.contains_key(&lead)
             || !self.orchestration_summaries.get(&lead).is_some_and(|s| !s.live)
@@ -979,6 +991,7 @@ impl Shell {
                         let solid = |id: &'static str, label: &'static str| {
                             div()
                                 .id((id, (lead as usize) << 8 | ix))
+                                .debug_selector(move || format!("{id}-{lead}-{ix}"))
                                 .role(Role::Button)
                                 .aria_label(label)
                                 .rounded(px(4.))
@@ -990,6 +1003,11 @@ impl Shell {
                                 .cursor_pointer()
                                 .hover(|s| s.bg(content(0.25)).text_color(content(1.)))
                                 .child(label)
+                                // The rail sits inside the lead's card, whose
+                                // click would select the lead again.
+                                .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                    cx.stop_propagation()
+                                })
                         };
                         let details = div()
                             .pl(px(if classic { 26. } else { 6. }))
@@ -1021,7 +1039,7 @@ impl Shell {
                                             d.child(
                                                 solid("rail-agent-open", "See details").on_click(
                                                     cx.listener(move |this, _, window, cx| {
-                                                        this.open(worker, window, cx)
+                                                        this.open_from_rail(worker, window, cx)
                                                     }),
                                                 ),
                                             )
@@ -1189,6 +1207,61 @@ mod tests {
             bounds(cx, format!("sidebar-session-{child}")).is_none(),
             "the operator rail folds away once its thread leaves play"
         );
+    }
+
+    #[gpui::test]
+    fn see_details_switches_to_the_agent_and_closing_it_returns_to_the_lead(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(|cx| cx.set_reduce_motion(true));
+        let (window, _, lead) = crate::shell::tests::window(cx);
+        let cx = &mut VisualTestContext::from_window(window.into(), cx);
+        for classic in [false, true] {
+            let worker = window
+                .update(cx, |shell, _, cx| {
+                    shell.workspace.classic_layout = classic;
+                    shell.sessions[&lead].update(cx, |s, _| s.summary.has_messages = true);
+                    let worker = chats(shell, 1, cx)[0];
+                    shell
+                        .orchestration_summaries
+                        .insert(lead, summary(worker, false, "completed"));
+                    shell.rails.open_tasks.insert((lead, 0));
+                    shell.selected_sessions.clear();
+                    shell.workspace.active = Some(lead);
+                    shell.invalidate_chrome(cx);
+                    worker
+                })
+                .unwrap();
+            settle(window, cx);
+            let button = bounds(cx, format!("rail-agent-open-{lead}-0"))
+                .unwrap_or_else(|| panic!("See details shows (classic {classic})"));
+            cx.simulate_click(button.center(), Default::default());
+            cx.run_until_parked();
+            window
+                .read_with(cx, |shell, _| {
+                    assert_eq!(
+                        shell.workspace.active,
+                        Some(worker),
+                        "the agent's chat comes to the front (classic {classic})"
+                    );
+                    assert!(shell.workspace.tab_of(worker).is_some(), "in its own tab");
+                })
+                .unwrap();
+            window
+                .update(cx, |shell, window, cx| shell.close_pane(worker, window, cx))
+                .unwrap();
+            cx.run_until_parked();
+            window
+                .read_with(cx, |shell, _| {
+                    assert_eq!(
+                        shell.workspace.active,
+                        Some(lead),
+                        "closing it returns to the lead (classic {classic})"
+                    );
+                    assert!(shell.tab_openers.is_empty());
+                })
+                .unwrap();
+        }
     }
 
     /// Adds codex chats with history to the current project.

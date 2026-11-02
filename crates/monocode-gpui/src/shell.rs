@@ -784,6 +784,9 @@ pub(crate) struct Shell {
     pane_sash: Option<SashDrag>,
     pane_motion: Option<PaneMotion>,
     skip_session_click: bool,
+    /// Tabs opened from another session's sidebar rail ("See details"), and
+    /// the session to return to when that tab closes while it is active.
+    pub(super) tab_openers: HashMap<i64, i64>,
     /// Live terminals of each project's dock, in the dock's tab order.
     terminals: HashMap<String, Vec<Entity<Terminal>>>,
     /// A project's dock sliding open (toward 1) or shut (toward 0).
@@ -1131,6 +1134,7 @@ impl Shell {
             pane_sash: None,
             pane_motion: None,
             skip_session_click: false,
+            tab_openers: HashMap::new(),
             sidebar_auto_hidden: false,
             sidebar_fitted_room: None,
             terminals: HashMap::new(),

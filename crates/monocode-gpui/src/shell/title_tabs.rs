@@ -272,9 +272,19 @@ impl Shell {
         }
         let active = self.active_title_tab(cx);
         let replace = active.as_ref().is_some_and(|tab| closing.contains(tab));
+        // A tab opened from another chat's rail returns to that chat, even
+        // when the two sit in different projects or worktrees.
+        let opener = self
+            .workspace
+            .active
+            .and_then(|id| self.tab_openers.get(&id))
+            .and_then(|opener| self.workspace.tab_of(*opener))
+            .map(TitleTab::Session)
+            .filter(|tab| !closing.contains(tab));
         let next = if replace {
             preferred
                 .filter(|tab| before.contains(tab) && !closing.contains(tab))
+                .or(opener)
                 .or_else(|| {
                     let index = before.iter().position(|tab| Some(tab) == active.as_ref())?;
                     // Browsers select the next tab to the right, then the one to the left.
@@ -315,6 +325,8 @@ impl Shell {
         self.workspace
             .scope_focus
             .retain(|_, tab| !closing.contains(tab));
+        let open = self.workspace.open_sessions();
+        self.tab_openers.retain(|id, _| open.contains(id));
         if replace {
             if let Some(monos) = self.monos.clone() {
                 monos.update(cx, |m, cx| m.close(cx));
