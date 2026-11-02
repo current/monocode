@@ -34,7 +34,7 @@ export function LeadRowTint({ working }: { working: boolean }) {
     <span
       aria-hidden
       data-lead-tint
-      className="pointer-events-none absolute inset-0 overflow-hidden rounded-md border border-sky-500/20 bg-sky-500/5 dark:border-sky-400/20 dark:bg-sky-400/5"
+      className="pointer-events-none absolute inset-0 overflow-hidden rounded-md bg-sky-500/5 ring-1 ring-inset ring-sky-500/20 dark:bg-sky-400/5 dark:ring-sky-400/20"
     >
       <span className="absolute inset-y-1 left-0 w-0.5 rounded-full bg-sky-500 dark:bg-sky-400" />
       {working ? <span data-lead-sheen className="sidebar-lead-sheen" /> : null}
@@ -65,7 +65,7 @@ export function AgentOfMark({
         event.stopPropagation();
         onOpen();
       }}
-      className="flex h-4 shrink-0 items-center gap-0.5 rounded px-0.5 text-sky-700 hover:bg-content/10 dark:text-sky-200/90"
+      className="relative -mr-0.5 flex h-4 shrink-0 items-center gap-0.5 rounded px-0.5 text-sky-700 after:absolute after:-inset-1 after:content-[''] hover:bg-content/10 focus-visible:outline-2 focus-visible:outline-accent dark:text-sky-200/90"
     >
       <CornerDownRight className="size-3" strokeWidth={1.75} />
       <span className="size-1 rounded-full bg-current" />
