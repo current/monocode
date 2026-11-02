@@ -24,6 +24,7 @@ import { initializeProviderBinaryPaths } from "./features/providers/model/provid
 // Lets file commands reach a connected machine for `remote://` paths.
 import "./features/connections/model/remoteCommands";
 import "./styles/index.css";
+import { IS_WEB } from "./platform/runtime";
 
 performance.mark("monocode:bootstrap");
 // Let local boot IPC overlap loading/evaluating the workspace UI.
@@ -72,51 +73,72 @@ function BootGate({ children }: { children: React.ReactNode }) {
   return children;
 }
 
-void listen<number>("quit_poll", (event) => {
-  void reportQuitPoll(event.payload);
-});
-// Scoped to this window on purpose: a global `listen` is registered as `Any`,
-// which Tauri matches for every event regardless of the emitter's target, so
-// one dialog would become one per window.
-void getCurrentWebviewWindow().listen<{ id: number; inFlight: number }>(
-  "quit_confirm",
-  (event) => {
-    void askQuitConfirmation(event.payload.id, event.payload.inFlight);
-  },
-);
-void listen<number>("quit_commit", (event) => {
-  void commitQuit(event.payload);
-});
-void listen("quit_aborted", () => {
-  abortQuit();
-});
+// The web desk has no native quit coordinator.
+if (!IS_WEB) {
+  void listen<number>("quit_poll", (event) => {
+    void reportQuitPoll(event.payload);
+  });
+  // Scoped to this window on purpose: a global `listen` is registered as `Any`,
+  // which Tauri matches for every event regardless of the emitter's target, so
+  // one dialog would become one per window.
+  void getCurrentWebviewWindow().listen<{ id: number; inFlight: number }>(
+    "quit_confirm",
+    (event) => {
+      void askQuitConfirmation(event.payload.id, event.payload.inFlight);
+    },
+  );
+  void listen<number>("quit_commit", (event) => {
+    void commitQuit(event.payload);
+  });
+  void listen("quit_aborted", () => {
+    abortQuit();
+  });
+}
 
-void Promise.all([
-  homeDirPrimed,
-  providerBinaryPathsPrimed,
-  loadBootWorkspace(),
-  appLoaded,
-]).then(
-  ([
-    ,
-    ,
-    { windowTransfer, resumed, history, historyCwd },
-    { default: App },
-  ]) => {
-    performance.mark("monocode:workspace-ready");
-    const installedUpdate = windowTransfer ? null : consumeInstalledUpdate();
-    ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
-      <React.StrictMode>
-        <BootGate>
-          <App
-            windowTransfer={windowTransfer}
-            resumed={resumed}
-            installedUpdate={installedUpdate}
-            history={history}
-            historyCwd={historyCwd}
-          />
-        </BootGate>
-      </React.StrictMode>,
-    );
-  },
-);
+// The web desk opens its host project before the workspace reads its boot
+// state, so the first render is already that project.
+const webDeskReady: Promise<boolean> = IS_WEB
+  ? import("./platform/web/boot").then(({ prepareWebDesk, renderWebDeskError }) =>
+      prepareWebDesk().then(
+        () => true,
+        (reason) => {
+          renderWebDeskError(document.getElementById("root") as HTMLElement, reason);
+          dismissBootSplash();
+          return false;
+        },
+      ),
+    )
+  : Promise.resolve(true);
+
+void webDeskReady.then((ready) => {
+  if (!ready) return;
+  return Promise.all([
+    homeDirPrimed,
+    providerBinaryPathsPrimed,
+    loadBootWorkspace(),
+    appLoaded,
+  ]).then(
+    ([
+      ,
+      ,
+      { windowTransfer, resumed, history, historyCwd },
+      { default: App },
+    ]) => {
+      performance.mark("monocode:workspace-ready");
+      const installedUpdate = windowTransfer ? null : consumeInstalledUpdate();
+      ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
+        <React.StrictMode>
+          <BootGate>
+            <App
+              windowTransfer={windowTransfer}
+              resumed={resumed}
+              installedUpdate={installedUpdate}
+              history={history}
+              historyCwd={historyCwd}
+            />
+          </BootGate>
+        </React.StrictMode>,
+      );
+    },
+  );
+});

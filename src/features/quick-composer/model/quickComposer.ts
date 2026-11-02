@@ -2,6 +2,7 @@ import { parseQuickAttachments } from "./quickAttachments";
 import { isHarnessAvailable } from "../../../integrations/harness/core/availability";
 import { invoke } from "@tauri-apps/api/core";
 import { IS_MAC } from "../../../platform/tauri/platform";
+import { IS_WEB } from "../../../platform/runtime";
 import { loadQuickComposerShortcut } from "../../settings/model/settings";
 import { pathKey, projectName, prettyParent } from "../../../shared/lib/paths";
 import {
@@ -75,7 +76,7 @@ export type QuickLaunch = {
 
 /** The panel exists on macOS only; elsewhere the shortcut is never claimed. */
 export function quickComposerSupported(): boolean {
-  return IS_MAC;
+  return IS_MAC && !IS_WEB;
 }
 
 export async function setQuickComposerShortcut(

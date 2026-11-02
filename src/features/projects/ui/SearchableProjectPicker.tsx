@@ -74,6 +74,8 @@ type Props = {
   projectMenuActive?: boolean;
   /** Lists Monos first, for the compact rail where they have no row of their own. */
   monos?: PickerMonos;
+  /** Shows the current project without the switcher (the web desk's one project). */
+  fixed?: boolean;
 };
 
 export function SearchableProjectPicker({
@@ -91,6 +93,7 @@ export function SearchableProjectPicker({
   onProjectContextMenu,
   projectMenuActive = false,
   monos,
+  fixed = false,
 }: Props) {
   const [open, setOpen] = useState(false);
   const pickerRef = useRef<HTMLDivElement>(null);
@@ -145,15 +148,18 @@ export function SearchableProjectPicker({
           activeMono
             ? `${action}, current mono ${activeMono.name}, ${MONO_STATUS_LABEL[activeMono.status ?? "idle"]}`
             : inProject
-              ? `${action}, current project ${label}`
+              ? fixed
+                ? `Current project ${label}`
+                : `${action}, current project ${label}`
               : "Choose project for note"
         }
-        aria-expanded={open}
-        aria-haspopup="dialog"
+        aria-expanded={fixed ? undefined : open}
+        aria-haspopup={fixed ? undefined : "dialog"}
+        disabled={fixed}
         data-tauri-drag-region="false"
         onClick={() => (open ? closePicker() : openPicker())}
         onKeyDown={(event) => {
-          if (open) return;
+          if (open || fixed) return;
           if (event.key !== "ArrowDown") return;
           event.preventDefault();
           openPicker();
@@ -161,7 +167,9 @@ export function SearchableProjectPicker({
         className={`flex min-w-0 items-center rounded-md text-[12px] leading-none ${
           compact ? "size-8 justify-center p-0" : "h-6.5 gap-1.5 px-2"
         } ${
-          open
+          fixed
+            ? "text-content/50"
+            : open
             ? "bg-selection text-content"
             : appearance === "filled"
               ? "bg-content/10 text-content hover:bg-content/[0.14]"
@@ -195,16 +203,18 @@ export function SearchableProjectPicker({
             <span className="min-w-0 truncate font-medium text-content/90">
               {activeMono?.name ?? label}
             </span>
-            <ChevronDown
-              className={`size-3 shrink-0 text-content/45 transition-transform ${
-                open ? "rotate-180" : ""
-              }`}
-              strokeWidth={1.75}
-            />
+            {fixed ? null : (
+              <ChevronDown
+                className={`size-3 shrink-0 text-content/45 transition-transform ${
+                  open ? "rotate-180" : ""
+                }`}
+                strokeWidth={1.75}
+              />
+            )}
           </>
         )}
       </button>
-      {open ? (
+      {open && !fixed ? (
         <ProjectPickerPopover
           anchor={pickerRef}
           projects={orderedProjects}

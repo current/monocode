@@ -43,6 +43,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { TerminalSpinner } from "../../features/sessions/ui/TerminalSpinner";
 import { TabLabel } from "../../shared/ui/TabLabel";
 import { WindowControls } from "./WindowControls";
+import { FEATURES } from "../../platform/runtime";
 import { PixelMascot } from "../../features/projects/ui/PixelMascot";
 import { MonoRailMascot } from "../../features/monos/ui/MonoRailMascot";
 import {
@@ -1056,7 +1057,7 @@ function TitleBarComponent({
     showTrailingActions ||
     showRightPanelToggle ||
     (mono && (onToggleMonoOverview || onOpenMonoSettings)) ||
-    (!IS_MAC && !hideWindowControls) ? (
+    (!IS_MAC && !hideWindowControls && FEATURES.windowControls) ? (
       <div className="flex h-full shrink-0 items-stretch">
         {showRightPanelToggle ? (
           // Clear of the window's right edge, like the traffic lights' inset
@@ -1115,7 +1116,9 @@ function TitleBarComponent({
             ) : null}
           </div>
         ) : null}
-        {!IS_MAC && !hideWindowControls ? <WindowControls /> : null}
+        {!IS_MAC && !hideWindowControls && FEATURES.windowControls ? (
+          <WindowControls />
+        ) : null}
       </div>
     ) : null;
 

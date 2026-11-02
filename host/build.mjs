@@ -9,7 +9,11 @@ await build({
   format: "esm",
   target: "node24",
   loader: { ".ps1": "text" },
-  define: { "import.meta.hot": "undefined" },
+  // Shared UI modules read Vite's build mode (src/platform/runtime.ts).
+  define: {
+    "import.meta.hot": "undefined",
+    "import.meta.env.MODE": JSON.stringify("host"),
+  },
   sourcemap: true,
 });
 await copyFile("host/provider-guard.mjs", "build/host/provider-guard.mjs");

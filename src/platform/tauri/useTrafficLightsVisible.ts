@@ -1,13 +1,15 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect, useState } from "react";
 import { IS_MAC } from "./platform";
+import { IS_WEB } from "../runtime";
 
 /** Native macOS buttons need room only while the window is not fullscreen. */
 export function useTrafficLightsVisible(): boolean {
-  const [visible, setVisible] = useState(IS_MAC);
+  // A browser tab has no traffic lights to make room for.
+  const [visible, setVisible] = useState(IS_MAC && !IS_WEB);
 
   useEffect(() => {
-    if (!IS_MAC) return;
+    if (!IS_MAC || IS_WEB) return;
 
     let mounted = true;
     let latest = 0;

@@ -206,6 +206,7 @@ import {
   saveProjectSidebarTab,
 } from "../features/settings/model/projectSidebarTab";
 import { HAS_NATIVE_GLASS, IS_MAC } from "../platform/tauri/platform";
+import { FEATURES, IS_WEB, WEB_NARROW_WIDTH } from "../platform/runtime";
 import {
   applyUiScale,
   loadUiScale,
@@ -1282,8 +1283,12 @@ function Workspace({
     [],
   );
   const [projectRailOpen, setProjectRailOpen] = useState(loadProjectRailOpen);
-  const [sessionSidebarOpen, setSessionSidebarOpen] = useState(
-    loadSessionSidebarOpen,
+  const [sessionSidebarOpen, setSessionSidebarOpen] = useState(() =>
+    // A phone-width web desk opens on the conversation; the title bar's
+    // panel button brings the session list back.
+    IS_WEB && window.innerWidth < WEB_NARROW_WIDTH
+      ? false
+      : loadSessionSidebarOpen(),
   );
   const tabCloseScope = "project" as const;
   const currentProjectDock = findProjectTerminal(projectTerminals, projectCwd);
@@ -1357,11 +1362,13 @@ function Workspace({
   );
   const [collapsedProjectRailMode, setCollapsedProjectRailMode] =
     useState<CollapsedProjectRailMode>(loadCollapsedProjectRailMode);
-  const insetLayout = useSyncExternalStore(
+  const storedInsetLayout = useSyncExternalStore(
     subscribeInsetLayout,
     loadInsetLayout,
     () => INSET_LAYOUT_DEFAULT,
   );
+  // The web desk embeds one project in a page: the classic layout, no rail.
+  const insetLayout = !IS_WEB && storedInsetLayout;
   const [insetRailHost, setInsetRailHost] = useState<HTMLDivElement | null>(
     null,
   );
@@ -3280,6 +3287,7 @@ function Workspace({
   );
 
   const onNewTerminal = useCallback(() => {
+    if (!FEATURES.terminals) return;
     onOpenTerminal(terminalCwd);
   }, [terminalCwd, onOpenTerminal]);
 
@@ -6559,6 +6567,7 @@ function Workspace({
   );
 
   const pickProject = useCallback(async () => {
+    if (!FEATURES.localProjects) return;
     // Several folders can be taken at once; each opens as its own project, and
     // the last one selected ends up focused.
     openProjects(await pickFolders());
@@ -12159,6 +12168,7 @@ function Workspace({
   }, []);
 
   const onOpenSearch = useCallback(() => {
+    if (!FEATURES.localProjects) return;
     workspaceNavigation.cancel();
     startTransition(() => {
       // With the Mono closed in the same commit, no frame shows the
@@ -12180,6 +12190,7 @@ function Workspace({
   }, []);
 
   const onOpenInbox = useCallback(() => {
+    if (!FEATURES.inbox) return;
     workspaceNavigation.cancel();
     startTransition(() => {
       closeMonoView();
@@ -12297,6 +12308,7 @@ function Workspace({
   );
 
   const onOpenNotes = useCallback(() => {
+    if (!FEATURES.notes) return;
     workspaceNavigation.cancel();
     if (!loadNotesEnabled()) return;
     startTransition(() => {
@@ -12316,6 +12328,7 @@ function Workspace({
   }, []);
 
   const onOpenAutomations = useCallback(() => {
+    if (!FEATURES.automations) return;
     workspaceNavigation.cancel();
     startTransition(() => {
       closeMonoView();
@@ -12354,6 +12367,7 @@ function Workspace({
 
   const openSettings = useCallback(
     (section?: SettingsSectionId, anchor?: SettingsAnchor) => {
+      if (!FEATURES.localSettings) return;
       workspaceNavigation.cancel();
       if (!settingsOpenRef.current) {
         settingsReturnViewRef.current = {
@@ -13709,7 +13723,11 @@ function Workspace({
         onBackFromDocument={() => setMonoOverviewDocument(null)}
         onOpenFile={onOpenFile}
         onClose={() => setMonoOverviewOpen(false)}
-        windowControls={monoCovers && !IS_MAC ? <WindowControls /> : undefined}
+        windowControls={
+          monoCovers && !IS_MAC && FEATURES.windowControls ? (
+            <WindowControls />
+          ) : undefined
+        }
       />
     ) : null;
   const monoSettingsDialog =
@@ -14067,18 +14085,19 @@ function Workspace({
       liveAgents={liveAgents}
       onSelectAgent={onSelectLiveAgent}
       onSelectProject={onSelectProject}
-      onOpenProject={pickProject}
-      onRemoveProject={onRemoveProject}
-      monos={sidebarMonos}
+      // Without a way to open projects the sidebar shows no project rail.
+      onOpenProject={FEATURES.localProjects ? pickProject : undefined}
+      onRemoveProject={FEATURES.localProjects ? onRemoveProject : undefined}
+      monos={FEATURES.monos ? sidebarMonos : undefined}
       monoViewActive={monoCovers}
       onNew={onNew}
       openSessions={openProjectSessions}
-      onNewTerminal={onNewTerminal}
-      onSearch={onOpenSearch}
-      onOpenInbox={onOpenInbox}
-      onOpenInboxItem={onOpenLinkedWorkItem}
-      onOpenNotes={notesEnabled ? onOpenNotes : undefined}
-      onOpenAutomations={onOpenAutomations}
+      onNewTerminal={FEATURES.terminals ? onNewTerminal : undefined}
+      onSearch={FEATURES.localProjects ? onOpenSearch : undefined}
+      onOpenInbox={FEATURES.inbox ? onOpenInbox : undefined}
+      onOpenInboxItem={FEATURES.inbox ? onOpenLinkedWorkItem : undefined}
+      onOpenNotes={FEATURES.notes && notesEnabled ? onOpenNotes : undefined}
+      onOpenAutomations={FEATURES.automations ? onOpenAutomations : undefined}
       onGoToFile={onGoToFile}
       searchActive={searchViewOpen}
       inboxActive={inboxViewOpen}
@@ -14087,18 +14106,24 @@ function Workspace({
       notesEnabled={notesEnabled}
       // The inset layout has no project rail: the sidebar header's menu
       // switches projects.
-      projectRailOpen={!insetLayout && projectRailOpen}
-      compactProjectRail={!insetLayout && compactProjectRail}
+      projectRailOpen={FEATURES.localProjects && !insetLayout && projectRailOpen}
+      compactProjectRail={
+        FEATURES.localProjects && !insetLayout && compactProjectRail
+      }
       titleBarAbove={insetLayout || compactTitleBar}
       inset={insetLayout}
-      onToggleProjectRail={onToggleProjectRail}
+      onToggleProjectRail={
+        FEATURES.localProjects ? onToggleProjectRail : undefined
+      }
       unseenFinishedIds={unseenFinishedIds}
       inboxUnseen={inboxUnseen}
       linkedSessionUpdateIds={linkedSessionUpdateIds}
       settingsOpen={settingsOpen}
       settingsSection={settingsSection}
-      onOpenSettings={onOpenSettings}
-      onOpenNotificationSettings={onOpenNotificationSettings}
+      onOpenSettings={FEATURES.localSettings ? onOpenSettings : undefined}
+      onOpenNotificationSettings={
+        FEATURES.localSettings ? onOpenNotificationSettings : undefined
+      }
       onSelectSettingsSection={onSelectSettingsSection}
       onCloseSettings={onCloseSettings}
       updateNotice={updateNotice}
@@ -14107,7 +14132,9 @@ function Workspace({
     />
   );
 
+  // The web desk has no local provider accounts or terminals to show here.
   const usageFooter =
+    IS_WEB ||
     (chromeSurfaceOpen && !(insetLayout && activeAppView)) ||
     (monoCovers && !insetLayout) ? null : (
       <UsageFooter
@@ -14211,7 +14238,7 @@ function Workspace({
                       undefined
                     }
                   >
-                    {!IS_MAC ? (
+                    {!IS_MAC && !IS_WEB ? (
                       <MenuBar
                         onNew={onNew}
                         onNewTerminal={onNewTerminal}
@@ -14715,6 +14742,9 @@ function Workspace({
               }}
             />
           )}
+          {/* Desktop-only notices: provider updates, layout, memory, reminders. */}
+          {IS_WEB ? null : (
+            <>
           <HarnessUpdateNotice
             topOffset={
               12 + (reminderNoticesHeight ? reminderNoticesHeight + 8 : 0)
@@ -14737,6 +14767,8 @@ function Workspace({
             chipHost={pressureChipHost}
             insetChip={insetLayout}
           />
+            </>
+          )}
           <ApprovalToasts
             notices={hiddenApprovalToasts}
             topOffset={
@@ -14748,6 +14780,7 @@ function Workspace({
             onFocusSession={onOpenApprovalSession}
             onApproval={onApproval}
           />
+          {IS_WEB ? null : (
           <ReminderNotices
             reminders={sessionReminders.due}
             error={sessionReminders.error}
@@ -14758,7 +14791,8 @@ function Workspace({
             onOpenSettings={() => openSettings("general", "notifications")}
             onHeightChange={setReminderNoticesHeight}
           />
-          {whatsNewVersion ? (
+          )}
+          {whatsNewVersion && !IS_WEB ? (
             <WhatsNewDialog
               version={whatsNewVersion}
               onClose={() => setWhatsNewVersion(null)}

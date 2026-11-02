@@ -1,0 +1,90 @@
+/*
+ * Web desk theme bridge. The embedding page (the Legend desk) owns these
+ * variables; the defaults are the Legend palette. A same-origin parent can
+ * override any of them on this document's root element, for example
+ *   frame.contentDocument.documentElement.style.setProperty("--desk-accent", "#00ac83")
+ * Only MonoCode's own tokens are remapped; components keep their styles.
+ */
+:root {
+  --desk-bg: #1f1e1c;
+  --desk-surface: #272624;
+  --desk-border: #2b2926;
+  --desk-text: #eee5db;
+  --desk-text-muted: #928d85;
+  --desk-accent: #9461cc;
+  --desk-heading: #eee5db;
+  --desk-font-ui: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, Arial,
+    sans-serif;
+  --desk-font-heading: "Newsreader", Georgia, "Times New Roman", serif;
+  --desk-font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+    "Liberation Mono", monospace;
+}
+
+html.web-desk {
+  /* Warm hue for the few rules that mix the theme's HSL parts directly. */
+  --theme-hue: 36;
+  --theme-saturation: 5%;
+  --theme-dark-lightness: 11.5%;
+  --content-lightness: 90%;
+  --sidebar-opacity: 1;
+  --window-background-opacity: 1;
+  --color-background-base: var(--desk-bg);
+  --color-content: var(--desk-text);
+  --color-stroke: var(--desk-border);
+  --color-accent: var(--desk-accent);
+  --color-markdown-heading: var(--desk-heading);
+  --font-sans: var(--desk-font-ui);
+  --font-mono: var(--desk-font-mono);
+  background: var(--desk-bg);
+  color-scheme: dark;
+}
+
+html.web-desk body {
+  font-family: var(--desk-font-ui);
+}
+
+html.web-desk h1,
+html.web-desk h2,
+html.web-desk h3 {
+  font-family: var(--desk-font-heading);
+}
+
+/* Shown when the desk bridge cannot be reached (src/platform/web/boot.ts). */
+.web-desk-boot-error {
+  display: flex;
+  min-height: 100vh;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 24px;
+  text-align: center;
+  color: var(--desk-text);
+  font-family: var(--desk-font-ui);
+}
+
+.web-desk-boot-error h1 {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 500;
+}
+
+.web-desk-boot-error p {
+  margin: 0;
+  max-width: 48ch;
+  font-size: 13px;
+  color: var(--desk-text-muted);
+}
+
+.web-desk-boot-error button {
+  margin-top: 8px;
+  border: 0;
+  border-radius: 8px;
+  padding: 8px 14px;
+  background: var(--desk-text);
+  color: var(--desk-bg);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}

@@ -17,6 +17,7 @@ id_ed25519*
 node_modules/
 dist/
 dist-ssr/
+dist-web/
 build/
 target/
 gen/schemas/

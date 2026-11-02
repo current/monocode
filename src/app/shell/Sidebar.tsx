@@ -198,6 +198,7 @@ import {
   ProjectPickerPopover,
   SearchableProjectPicker,
 } from "../../features/projects/ui/SearchableProjectPicker";
+import { FEATURES } from "../../platform/runtime";
 import { useRailTooltip } from "./RailTooltip";
 import { useProjectMenu } from "./useProjectMenu";
 import { SessionFiltersMenu } from "../../features/sessions/ui/SessionFiltersMenu";
@@ -3095,7 +3096,8 @@ function SidebarComponent({
             <div className="flex shrink-0 flex-col gap-px p-2 empty:hidden">
               <GithubStarPrompt />
               {/* Without a project, the inset header has no Settings menu. */}
-              {(inset ? !inProject : !compactProjectRail) ? (
+              {onOpenSettings &&
+              (inset ? !inProject : !compactProjectRail) ? (
                 <RailAction
                   label="Settings"
                   icon={Settings}
@@ -3448,6 +3450,7 @@ function SidebarProjectPicker({
         cwd={cwd}
         recents={recents}
         busy={busy}
+        fixed={!FEATURES.localProjects}
         className="flex-1"
         onSelectProject={onSelectProject}
         onOpenProject={onOpenProject}

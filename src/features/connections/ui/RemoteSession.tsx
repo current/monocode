@@ -469,9 +469,15 @@ function ConnectedRemoteSession({
   // 1M context only on an account that has it.
   useEffect(() => {
     if (!online || sessionId || !catalog || !providers.length) return;
-    const harness = providers.includes(draft.harness)
+    // Prefer a provider that listed models: one that is installed but signed
+    // out (an error in the catalog) cannot start a session.
+    const usable = providers.filter(
+      (provider) => (catalog.models[provider] ?? []).length > 0,
+    );
+    const choices = usable.length ? usable : providers;
+    const harness = choices.includes(draft.harness)
       ? draft.harness
-      : providers[0];
+      : choices[0];
     const models = catalog.models[harness] ?? [];
     const model =
       findRemoteModel(models, draft.model) ??
