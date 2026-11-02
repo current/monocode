@@ -748,7 +748,10 @@ impl Shell {
     }
     pub(super) fn clear_orchestration_summary(&mut self, lead: i64, cx: &mut Context<Self>) {
         if self.orchestrations.contains_key(&lead)
-            || !self.orchestration_summaries.get(&lead).is_some_and(|s| !s.live)
+            || !self
+                .orchestration_summaries
+                .get(&lead)
+                .is_some_and(|s| !s.live)
         {
             return;
         }
@@ -1005,9 +1008,7 @@ impl Shell {
                                 .child(label)
                                 // The rail sits inside the lead's card, whose
                                 // click would select the lead again.
-                                .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                                    cx.stop_propagation()
-                                })
+                                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         };
                         let details = div()
                             .pl(px(if classic { 26. } else { 6. }))

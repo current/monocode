@@ -52,7 +52,12 @@ for line in sys.stdin:
     elif value.get('id') == 3:
         assert value['method'] == 'turn/start'
         with open('expected-prompt.txt') as expected:
-            assert value['params']['input'] == [{'type': 'text', 'text': expected.read()}], 'The provider must receive the prepared prompt'
+            actual = value['params']['input']
+            assert len(actual) == 1 and actual[0]['type'] == 'text'
+            introduction, prepared = actual[0]['text'].split('\n\n', 1)
+            assert introduction.startswith('Before starting or managing agents, request Operator with: ')
+            assert ' app operator.request --json ' in introduction
+            assert prepared == expected.read(), 'The provider must receive the prepared prompt after app discovery'
         send({'method': 'item/agentMessage/delta', 'params': {'itemId': 'before', 'delta': 'Before the visual.'}})
         time.sleep(0.05)
         address, port = os.environ['MONOCODE_VISUAL_ENDPOINT'].rsplit(':', 1)

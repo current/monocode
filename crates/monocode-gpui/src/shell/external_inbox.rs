@@ -308,4 +308,28 @@ mod tests {
             })
             .unwrap();
     }
+    #[gpui::test]
+    fn inbox_launch_settings_mark_workers_even_with_operator_project_default(
+        cx: &mut TestAppContext,
+    ) {
+        let (window, _, _) = crate::shell::tests::window(cx);
+        window
+            .update(cx, |shell, _, _| {
+                let settings = monocode_core::app_access::launch_settings(
+                    &serde_json::json!({"prompt":"Review"}),
+                    "codex",
+                    Settings {
+                        operator_enabled: true,
+                        ..Default::default()
+                    },
+                    Kind::Codex,
+                    &[],
+                )
+                .unwrap();
+                assert!(settings.operator_worker);
+                assert!(!settings.operator_enabled);
+                let _ = shell;
+            })
+            .unwrap();
+    }
 }

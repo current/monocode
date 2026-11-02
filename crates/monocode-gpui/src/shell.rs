@@ -4433,6 +4433,7 @@ impl Shell {
         let account = crate::accounts::get(cx)
             .map(|center| center.read(cx).selected(kind, &cwd))
             .unwrap_or_default();
+        let operator_enabled = self.appearance(&cwd).new_chats_operator;
         let access = crate::conversation::default_access(cx);
         let effort = crate::conversation::preferred_effort(kind.id(), cx);
         let work = cx.background_executor().spawn({
@@ -4448,6 +4449,8 @@ impl Shell {
                     model,
                 );
                 settings.access = access;
+                settings.operator_enabled = operator_enabled;
+                settings.operator_worker = false;
                 if let Some(effort) = effort {
                     settings.model_settings.retain(|key, _| {
                         !matches!(
@@ -4459,7 +4462,8 @@ impl Shell {
                 }
                 settings.account = account;
                 settings.worktree_cwd = worktree_cwd;
-                if settings.model.is_some()
+                if settings.operator_enabled
+                    || settings.model.is_some()
                     || settings.effort.is_some()
                     || !settings.model_settings.is_empty()
                     || settings.worktree_cwd.is_some()
@@ -5584,6 +5588,9 @@ impl Shell {
                 let mut items: Vec<MenuItem> = vec![
                     MenuItem::Custom(controls.clone().into(), controls.read(cx).focus(cx)),
                     MenuItem::Separator,
+                    MenuAction::new("project-operator", "New chats start with Operator")
+                        .checked(self.appearance(path).new_chats_operator)
+                        .into(),
                     MenuAction::new("project-theme", "Theme colors")
                         .icon("palette")
                         .into(),
@@ -5780,6 +5787,10 @@ impl Shell {
                     } else {
                         cx.reveal_path(std::path::Path::new(&path));
                     }
+                } else if action == "project-operator" {
+                    let mut appearance = self.appearance(&path);
+                    appearance.new_chats_operator = !appearance.new_chats_operator;
+                    self.save_project_appearance(path, appearance, cx);
                 } else if action == "project-theme" {
                     self.open_project_theme(path, window, cx);
                 } else if action == "background" {

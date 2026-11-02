@@ -194,6 +194,7 @@ pub(crate) struct Conversation {
     _account_usage: Option<Subscription>,
     approvals: std::collections::VecDeque<Approval>,
     approval_ui: approvals::State,
+    pub(crate) operator_request: Option<String>,
     questions:
         std::collections::VecDeque<(Entity<crate::questions::QuestionCard>, Vec<Subscription>)>,
     question_overlay: crate::questions::Overlay,
@@ -348,7 +349,7 @@ impl Conversation {
             || self.input.read(cx).is_composing()
     }
     pub(crate) fn needs_approval(&self) -> bool {
-        !self.approvals.is_empty() || !self.questions.is_empty()
+        !self.approvals.is_empty() || !self.questions.is_empty() || self.operator_request.is_some()
     }
     pub(crate) fn responding(&self) -> bool {
         self.busy && !self.stopping
@@ -663,6 +664,7 @@ impl Conversation {
             _account_usage: account_usage,
             approvals: Default::default(),
             approval_ui: Default::default(),
+            operator_request: None,
             questions: Default::default(),
             question_overlay: Default::default(),
             controls: None,
@@ -1123,7 +1125,8 @@ impl Conversation {
         let cancel = self.cancel.clone();
         // Composer modes reset after Send; the thread grant and running turn's
         // access policy must outlive that reset and edits to the next draft.
-        self.settings.operator_enabled |= self.settings.operator;
+        self.settings.operator_enabled = !self.settings.operator_worker
+            && (self.settings.operator_enabled || self.settings.operator);
         self.app_read_only = self.settings.plan
             || self.settings.orchestrator
             || self.settings.access == AccessMode::ReadOnly;
@@ -2883,6 +2886,7 @@ impl Conversation {
                         .child(picker),
                 )
             })
+            .child(self.operator_grant_card(cx))
             .child(self.approval_shelf(window, cx))
             .child(
                 div()

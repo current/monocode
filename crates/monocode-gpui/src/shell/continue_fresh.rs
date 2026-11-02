@@ -17,6 +17,7 @@ pub(super) fn fresh_settings(from: &Settings) -> Settings {
         thinking: from.thinking,
         model_settings: from.model_settings.clone(),
         operator_enabled: from.operator_enabled,
+        operator_worker: from.operator_worker,
         worktree_cwd: from.worktree_cwd.clone(),
         worktree_base: from.worktree_base.clone(),
         disable_claude_hooks: from.disable_claude_hooks,
@@ -112,10 +113,20 @@ mod tests {
         assert_eq!(fresh.model.as_deref(), Some("opus"));
         assert_eq!(fresh.effort.as_deref(), Some("high"));
         assert!(fresh.operator_enabled);
+        assert!(!fresh.operator_worker);
         assert_eq!(fresh.worktree_cwd.as_deref(), Some("/work/tree"));
         assert!(fresh.environment.is_empty());
         assert!(fresh.handoff.is_none());
         assert!(!fresh.internal_message);
         assert_eq!(fresh.revision, 0);
+    }
+    #[test]
+    fn worker_continuations_remain_workers() {
+        let fresh = fresh_settings(&Settings {
+            operator_worker: true,
+            ..Default::default()
+        });
+        assert!(fresh.operator_worker);
+        assert!(!fresh.operator_enabled);
     }
 }

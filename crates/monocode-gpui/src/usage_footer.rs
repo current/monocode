@@ -26,6 +26,10 @@ pub(crate) fn bind(cx: &mut App) {
 
 use crate::accounts::{Cached as CachedUsage, Key};
 
+fn idle_label(state: &CachedUsage) -> Option<&'static str> {
+    state.error.as_ref().filter(|e| e.is_idle()).map(|_| "Idle")
+}
+
 fn index(kind: Kind) -> usize {
     match kind {
         Kind::Codex => 0,
@@ -59,6 +63,7 @@ pub(crate) struct UsageFooter {
     open: bool,
     /// UsageFooter's `footer` variant: the classic layout's bordered strip.
     classic: bool,
+    activation: Option<gpui::Subscription>,
     show_remaining: bool,
     _clock: gpui::Task<()>,
 }
@@ -136,6 +141,7 @@ impl UsageFooter {
                     },
                 )
             }),
+            activation: None,
             kind,
             key: Key::new(kind, Default::default(), None),
             project: String::new(),
@@ -496,7 +502,11 @@ impl UsageFooter {
                             .text_size(px(10.))
                             .line_height(px(16.))
                             .text_color(rgb(0xfcd34d))
-                            .child("Couldn’t refresh. Showing the last available snapshot."),
+                            .child(if idle_label(state).is_some() {
+                                "Idle · Refreshes on next use"
+                            } else {
+                                "Couldn’t refresh. Showing the last available snapshot."
+                            }),
                     )
                 },
             )
@@ -519,6 +529,8 @@ impl UsageFooter {
                                 .text_color(content(0.65))
                                 .child(if loading {
                                     "Loading usage…"
+                                } else if let Some(label) = idle_label(state) {
+                                    label
                                 } else if state.error.as_ref().is_some_and(|e| e.unavailable) {
                                     "Not connected"
                                 } else {
@@ -812,7 +824,30 @@ impl UsageFooter {
 }
 use crate::accounts::ui::bar_color as usage_color;
 impl Render for UsageFooter {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.activation.is_none() {
+            self.activation = Some(cx.observe_window_activation(window, |this, window, cx| {
+                if window.is_window_active() {
+                    if let Some(center) = crate::accounts::get(cx) {
+                        center.update(cx, |center, cx| {
+                            // Only accounts showing Idle or an error: focus changes are frequent and
+                            // every read hits the Keychain and the usage endpoint.
+                            let keys: Vec<_> = center
+                                .usage
+                                .iter()
+                                .filter(|(_, state)| state.error.is_some() && !state.fetching)
+                                .map(|(key, _)| key.clone())
+                                .collect();
+                            for key in keys {
+                                center.refresh(key, true, cx);
+                            }
+                        });
+                    } else {
+                        this.refresh(true, cx);
+                    }
+                }
+            }));
+        }
         let state = &self.cache[index(self.kind)];
         let now = usage::now_ms();
         let label = if let Some(snapshot) = &state.snapshot {
@@ -828,6 +863,8 @@ impl Render for UsageFooter {
                 })
                 .collect::<Vec<_>>()
                 .join(" · ")
+        } else if let Some(label) = idle_label(state) {
+            label.into()
         } else if state.fetching || state.error.is_none() {
             "···".into()
         } else if state.error.as_ref().is_some_and(|e| e.unavailable) {
@@ -1033,6 +1070,20 @@ mod tests {
                 );
             })
             .unwrap();
+    }
+    #[gpui::test]
+    fn idle_preserves_snapshot_and_has_idle_label(cx: &mut gpui::TestAppContext) {
+        let footer = cx.new(|cx| UsageFooter::new(Kind::Claude, cx));
+        footer.update(cx, |footer, _| {
+            let state = &mut footer.cache[index(Kind::Claude)];
+            state.snapshot = Some(Snapshot::default());
+            state.complete(Err(FetchError {
+                message: "Refreshes on next use".into(),
+                unavailable: false,
+            }));
+            assert!(state.snapshot.is_some());
+            assert_eq!(idle_label(state), Some("Idle"));
+        });
     }
     #[test]
     fn failed_refresh_keeps_snapshot_but_sign_out_clears_it() {

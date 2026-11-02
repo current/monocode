@@ -13,6 +13,10 @@ use std::collections::HashMap;
 mod tests;
 
 pub fn validate_operator(action: &str, input: &Value) -> Result<(), String> {
+    if action == "operator.request" {
+        text(input, "reason", 2000)?;
+        return Ok(());
+    }
     if !matches!(
         action,
         "models.list"
@@ -244,6 +248,7 @@ pub fn launch_settings(
     settings.mono_sent_at = None;
     settings.operator = false;
     settings.operator_enabled = false;
+    settings.operator_worker = true;
     settings.orchestrator = false;
     settings.plan = false;
     settings.environment.clear();
