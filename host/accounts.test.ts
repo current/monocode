@@ -229,6 +229,37 @@ describe("host registry and spawn environment", () => {
     expect(accountSpawnEnv("claude", undefined)).toEqual({});
   });
 
+  it("adds a setup-token login to the spawn env when the home has one", () => {
+    const { claude } = registry();
+    writeFileSync(join(claude, ".oauth-token"), "sk-ant-oat01-test\n", { mode: 0o600 });
+    expect(accountSpawnEnv("claude", "claude-alt")).toEqual({
+      CLAUDE_CONFIG_DIR: claude,
+      CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-test",
+    });
+  });
+
+  it("reports a token account's usage from the pushed snapshot, else unknown but usable", async () => {
+    const { claude } = registry();
+    writeFileSync(join(claude, ".oauth-token"), "sk-ant-oat01-test", { mode: 0o600 });
+    const account = { id: "claude-alt", label: "Claude (alt)", harness: "claude" as const, home: claude };
+    const now = Date.parse("2026-11-02T20:00:00Z");
+    const httpGet = vi.fn();
+    expect((await probeClaudeUsage(account, { now, httpGet })).state).toBe("unknown");
+    writeFileSync(
+      join(claude, "usage.json"),
+      JSON.stringify({
+        fetchedAt: now - 60_000,
+        usage: { five_hour: { utilization: 42, resets_at: "2026-11-02T22:00:00Z" }, seven_day: { utilization: 10 } },
+      }),
+    );
+    const usage = await probeClaudeUsage(account, { now, httpGet });
+    expect(usage.state).toBe("ok");
+    expect(usage.fiveHour?.usedPercent).toBe(42);
+    writeFileSync(join(claude, "usage.json"), JSON.stringify({ fetchedAt: now - 3_600_000, usage: {} }));
+    expect((await probeClaudeUsage(account, { now, httpGet })).state).toBe("unknown");
+    expect(httpGet).not.toHaveBeenCalled();
+  });
+
   it("refuses unknown and wrong-harness accounts at spawn", () => {
     registry();
     expect(() => accountSpawnEnv("claude", "nope")).toThrow(/Unknown provider account/);

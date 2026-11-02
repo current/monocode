@@ -299,10 +299,42 @@ export class AccountBook {
 }
 
 /** Environment that points a CLI at an account's home. */
+/** Long-lived `claude setup-token` token, if the account uses one instead of a full login. */
+export const CLAUDE_TOKEN_FILE = ".oauth-token";
+/** Usage snapshot pushed by the owner's Mac (raw /api/oauth/usage body + fetchedAt), for token accounts. */
+export const CLAUDE_USAGE_FILE = "usage.json";
+const USAGE_SNAPSHOT_MAX_AGE_MS = 30 * 60_000;
+
+function claudeToken(home: string): string | undefined {
+  try {
+    const token = readFileSync(join(home, CLAUDE_TOKEN_FILE), "utf8").trim();
+    return token || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function accountEnv(account: AccountConfig): Record<string, string> {
-  return account.harness === "claude"
-    ? { CLAUDE_CONFIG_DIR: account.home }
-    : { CODEX_HOME: account.home };
+  if (account.harness !== "claude") return { CODEX_HOME: account.home };
+  const token = claudeToken(account.home);
+  return token
+    ? { CLAUDE_CONFIG_DIR: account.home, CLAUDE_CODE_OAUTH_TOKEN: token }
+    : { CLAUDE_CONFIG_DIR: account.home };
+}
+
+/** Usage for a token account: the Mac's latest snapshot, or "unknown" (still usable). */
+async function pushedClaudeUsage(account: AccountConfig, now: number): Promise<Usage> {
+  try {
+    const saved = JSON.parse(
+      await readFile(join(account.home, CLAUDE_USAGE_FILE), "utf8"),
+    ) as { fetchedAt?: unknown; usage?: unknown };
+    const at = timestamp(saved.fetchedAt);
+    if (at !== undefined && now - at <= USAGE_SNAPSHOT_MAX_AGE_MS)
+      return { ...parseClaudeUsage(saved.usage, at), checkedAt: at };
+  } catch {
+    // no snapshot yet
+  }
+  return { state: "unknown", detail: "Usage not reported yet", checkedAt: now };
 }
 
 // The host's registry, reloaded when the file changes.
@@ -500,6 +532,8 @@ export async function probeClaudeUsage(
   }
   const hasToken =
     typeof oauth?.accessToken === "string" && oauth.accessToken.length > 0;
+  if (!hasToken && claudeToken(account.home))
+    return pushedClaudeUsage(account, now);
   if (!hasToken)
     return { state: "disconnected", detail: "Not signed in", checkedAt: now };
   const expiresAt = timestamp(oauth!.expiresAt);
