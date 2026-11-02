@@ -23,6 +23,10 @@ import {
 } from "../src/features/sessions/model/session";
 import { namedWorktreeBranch } from "../src/features/source-control/model/worktrees";
 import {
+  consumeOperatorCommand,
+  operatorEnabledInThread,
+} from "../src/features/sessions/model/operatorCommand";
+import {
   isRemoteProvider,
   type HostCommand,
   type HostSession,
@@ -243,7 +247,21 @@ export function parseCommand(input: unknown): HostCommand {
   throw new Error("Unsupported command");
 }
 
+/** Lets operator mode (host/app-access.ts) observe turns without the engine
+ * knowing about tokens or reports. Hooks must not throw. */
+export interface HostEngineHooks {
+  /** Operator mode is available; without it `/operator` turns are refused. */
+  operator?: boolean;
+  /** An /operator thread's turn is about to reach its provider. Returns the
+   * text the provider receives instead of the visible prompt. */
+  operatorTurnStarting?(value: HostSession, prompt: string, operatorTurn: boolean): string;
+  /** Any turn settled (after it was saved). */
+  turnSettled?(value: HostSession, outcome: { cancelled: boolean }): void;
+  sessionDeleted?(id: string): void;
+}
+
 export class HostEngine {
+  hooks: HostEngineHooks = {};
   private switchingProjects = new Set<string>();
   private running = new Map<
     string,
@@ -392,6 +410,7 @@ export class HostEngine {
             );
           this.live.delete(id);
           this.running.delete(id);
+          this.notifySettled(this.store.session(id), false);
           if (latest.session.providerSessionId)
             provider.bind(
               id,
@@ -411,9 +430,16 @@ export class HostEngine {
     this.retryTimers.set(id, timer);
   }
 
-  command(raw: unknown): CommandReceipt {
+  /** `internal.sessionId` names a created session (app launches use
+   * `app-<caller>-<request>` so the sidebar can find their lead). */
+  command(raw: unknown, internal?: { sessionId?: string }): CommandReceipt {
     if (this.closing) throw new Error("Host is stopping");
     const command = parseCommand(raw);
+    if (
+      internal?.sessionId !== undefined &&
+      (command.type !== "create" || !/^app-[A-Za-z0-9-]{1,200}$/.test(internal.sessionId))
+    )
+      throw new Error("Invalid internal session ID");
     const signature = createHash("sha256")
       .update(JSON.stringify(command))
       .digest("hex");
@@ -428,6 +454,8 @@ export class HostEngine {
         const project = this.store.project(command.projectId);
         if (this.switchingProjects.has(project.id))
           throw new Error("Wait for the branch switch to finish");
+        if (internal?.sessionId && this.exists(internal.sessionId))
+          throw new Error("Session already exists");
         this.provider(command.harness);
         const cwd = resolveHostWorktree(project.cwd, command.worktreeCwd);
         const now = Date.now();
@@ -439,7 +467,7 @@ export class HostEngine {
           createdAt: now,
           updatedAt: now,
           session: {
-            id: randomUUID(),
+            id: internal?.sessionId ?? randomUUID(),
             cwd,
             harness: command.harness,
             model: command.model,
@@ -553,6 +581,21 @@ export class HostEngine {
               plan.plan?.status === "built")
           )
             throw new Error("Plan is not ready to build");
+          const operator =
+            command.type === "send"
+              ? consumeOperatorCommand(command.text)
+              : { text: "", matched: false };
+          if (operator.matched && !this.hooks.operator)
+            throw new Error("Operator mode is unavailable on this host");
+          if (operator.matched && command.type === "send" && command.intent && command.intent !== "default")
+            throw new Error("Use /operator from a regular session turn");
+          const turnText = operator.matched
+            ? operator.text.trim() ||
+              "Explain what you can do in MonoCode with the app CLI."
+            : command.type === "send"
+              ? command.text
+              : "/compact";
+          const operatorTurn = operator.matched;
           const attachments =
             command.type === "send"
               ? (draft?.attachments ??
@@ -584,7 +627,7 @@ export class HostEngine {
               title:
                 firstTurn && placeholderTitle
                   ? titleFromPrompt(
-                      command.text,
+                      turnText,
                       value.session.harness,
                       attachments,
                     )
@@ -607,7 +650,9 @@ export class HostEngine {
                 {
                   id: command.commandId,
                   role: "user",
-                  text: command.type === "compact" ? "/compact" : command.text,
+                  text: turnText,
+                  // This persisted field keeps its name for saved sessions.
+                  ...(operator.matched ? { monocode: true } : {}),
                   ...(attachments.length ? { attachments } : {}),
                   startedAt: Date.now(),
                   turnModel: {
@@ -625,14 +670,15 @@ export class HostEngine {
           effect = (saved) => {
             this.run(
               saved,
-              command.type === "compact" ? null : command.text,
+              command.type === "compact" ? null : turnText,
               command.type === "send" ? command.intent : undefined,
               attachments,
+              operatorTurn,
             );
             if (firstTurn && command.type === "send") {
               this.generateFirstTurnNames(
                 saved,
-                command.text,
+                turnText,
                 placeholderTitle,
               );
             }
@@ -780,9 +826,12 @@ export class HostEngine {
     prompt: string | null,
     intent?: "default" | "plan" | "build",
     attachments: Session["blocks"][number]["attachments"] = [],
+    operatorTurn = false,
   ): void {
     const { session, runId } = value;
     const provider = this.provider(session.harness);
+    const appAccess =
+      this.hooks.operator === true && operatorEnabledInThread(session.blocks);
     const active = { runId: runId!, done: Promise.resolve(), cancelled: false, persistenceFailed: false };
     this.running.set(session.id, active);
     this.live.set(session.id, { value, events: [] });
@@ -791,12 +840,17 @@ export class HostEngine {
         let error: string | undefined;
         try {
           if (!this.closing && !active.cancelled) {
+            const providerPrompt =
+              appAccess && prompt !== null && this.hooks.operatorTurnStarting
+                ? this.hooks.operatorTurnStarting(value, prompt, operatorTurn)
+                : prompt;
             const input: HarnessSessionInput = {
               sessionId: session.id,
               cwd: session.cwd,
               model: session.model,
               modelSettings: session.modelSettings,
               runtimeMode: session.runtimeMode,
+              ...(appAccess ? { appAccess: true, controlsAgents: true } : {}),
               intent,
               onEvent: (event) => this.event(session.id, runId!, event),
             };
@@ -804,7 +858,7 @@ export class HostEngine {
             else
               await provider.send({
                 ...input,
-                text: prompt,
+                text: providerPrompt ?? prompt,
                 attachments: attachments?.map((file) =>
                   isVisionImage(file.mimeType) &&
                   file.path &&
@@ -826,6 +880,7 @@ export class HostEngine {
         this.flush(session.id);
         this.live.delete(session.id);
         const latest = this.store.session(session.id);
+        let settledValue: HostSession | undefined;
         if (latest.runId === runId) {
           const message = this.closing
             ? "Host stopped. This turn was interrupted."
@@ -834,7 +889,7 @@ export class HostEngine {
               : active.cancelled
               ? "Stopped by you."
               : error;
-          this.save(
+          settledValue = this.save(
             this.settled(
               latest,
               this.closing || active.persistenceFailed ? "interrupted" : "idle",
@@ -844,6 +899,7 @@ export class HostEngine {
           );
         }
         this.running.delete(session.id);
+        this.notifySettled(settledValue ?? latest, active.cancelled);
         // stop/forget releases callbacks and native resources; bind only retained
         // provider conversation identity for an explicit future follow-up.
         const persisted = this.store.session(session.id).session;
@@ -876,6 +932,36 @@ export class HostEngine {
         () => this.scheduledFlush(id, this.provider(session.harness)),
         FLUSH_MS,
       );
+  }
+
+  private notifySettled(value: HostSession, cancelled: boolean): void {
+    try {
+      this.hooks.turnSettled?.(value, { cancelled });
+    } catch (error) {
+      console.error(
+        "Operator turn hook failed:",
+        error instanceof Error ? error.message : "unknown error",
+      );
+    }
+  }
+
+  exists(id: string): boolean {
+    try {
+      this.store.session(id);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Whether a session has a turn in flight (including one still settling). */
+  isRunning(id: string): boolean {
+    return this.running.has(id);
+  }
+
+  deleteSession(id: string): void {
+    this.store.deleteSession(id);
+    this.hooks.sessionDeleted?.(id);
   }
 
   private settled(

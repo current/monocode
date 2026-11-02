@@ -30,6 +30,7 @@ import {
 import { connectionInfo, installService, uninstallService } from "./service";
 import { version } from "../package.json";
 import { protectWindowsDirectory } from "./windows";
+import { HostAppAccess, installAppLauncher, runAppCli } from "./app-access";
 
 process.umask(0o077);
 // npm-based providers can launch Node subprocesses without a separate Node
@@ -74,6 +75,11 @@ async function main() {
     console.log(version);
     return;
   }
+  if (command === "app") {
+    // Run by an /operator session's agent; talks to the running host only.
+    process.exitCode = await runAppCli(args.slice(1));
+    return;
+  }
   if (command === "help" || command === "--help") {
     console.log(`MonoCode Host (experimental; Node 24+; Windows/Linux/macOS)
   serve                 Run in foreground on 127.0.0.1
@@ -84,6 +90,7 @@ async function main() {
   status                Check the running host
   stop                  Stop the host and interrupt its running turns
   pair --name <device>  Issue a device credential (shown once)
+  app ACTION --json J   App CLI for /operator sessions (run app --help)
   devices               List paired devices
   revoke <device-id>    Revoke a device credential
 Options: --data-dir <directory> --port <port> (default 3774)
@@ -238,6 +245,14 @@ Connect another computer using an SSH forward to the loopback port.`);
       }
     }
     const engine = new HostEngine(store, hostProviders);
+    const app = new HostAppAccess(engine, {
+      cli: installAppLauncher(
+        directory,
+        process.execPath,
+        fileURLToPath(import.meta.url),
+      ),
+      providers: () => available,
+    });
     const secret = randomBytes(32).toString("base64url");
     let stopping = false;
     let stop: () => Promise<void>;
@@ -270,12 +285,13 @@ Connect another computer using an SSH forward to the loopback port.`);
           response.writeHead(400).end();
         }
       });
-    });
+    }, app);
     stop = async () => {
       if (stopping) return;
       stopping = true;
       server.close();
       server.closeAllConnections();
+      app.close();
       await engine.close();
       await backend.close();
       release();
@@ -285,6 +301,7 @@ Connect another computer using an SSH forward to the loopback port.`);
       server.once("error", reject);
       server.listen(port, "127.0.0.1", resolve);
     });
+    app.listen(`http://127.0.0.1:${port}/app`);
     writeFileSync(
       statePath,
       JSON.stringify({ pid: process.pid, port, secret }),

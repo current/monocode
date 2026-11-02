@@ -97,6 +97,7 @@ import { suppressTextSelection } from "../../shared/lib/drag";
 import { LAYER } from "../../shared/lib/layers";
 import { RevealHeight } from "../../shared/ui/RevealHeight";
 import { MODE_COMMAND_STYLES } from "../../features/sessions/ui/modeCommands";
+import { AgentOfMark, LeadRowTint, sessionLeadMarks } from "./LeadMarks";
 import { OPERATOR_COMMAND } from "../../features/sessions/model/operatorCommand";
 import { ORCHESTRATOR_COMMAND } from "../../features/sessions/model/orchestratorCommand";
 import {
@@ -828,6 +829,16 @@ function SidebarComponent({
   const startedSessions = inset
     ? groupStartedSessions(visibleSessions)
     : NO_STARTED_SESSIONS;
+  // Leads wear their mode's colour and agents point back to them, in both
+  // layouts; the classic list leaves started sessions where they are.
+  const leadMarks = sessionLeadMarks(
+    inset ? startedSessions.byParent : groupStartedSessions(visibleSessions).byParent,
+    listedBusySessionIds,
+  );
+  const leadTitleOf = (id: string) => {
+    const lead = visibleSessions.find((session) => session.id === id);
+    return lead ? sessionDisplayTitle(lead.title, lead.harness) : "its lead";
+  };
   // Launches the sidebar has already shown for this project. Anything newer
   // grows in under its caller; what is there when a project opens does not.
   const knownStarted = useRef<{ cwd: string; ids: Set<string> } | null>(null);
@@ -1977,6 +1988,13 @@ function SidebarComponent({
         compact={compact}
         dense={inset}
         nested={nested}
+        leadWorking={leadMarks.leads.get(session.id)?.working}
+        agentOfId={nested ? undefined : leadMarks.agentLead.get(session.id)}
+        agentOfTitle={
+          nested || !leadMarks.agentLead.has(session.id)
+            ? undefined
+            : leadTitleOf(leadMarks.agentLead.get(session.id)!)
+        }
         startedCount={startedCount}
         startedOpen={startedOpen}
         startedInView={startedInView}
@@ -4816,6 +4834,9 @@ export const SessionCard = memo(function SessionCard({
   compact = false,
   dense = false,
   nested = false,
+  leadWorking,
+  agentOfId,
+  agentOfTitle,
   startedCount = 0,
   startedOpen = false,
   startedInView = false,
@@ -4849,6 +4870,12 @@ export const SessionCard = memo(function SessionCard({
   /** A session another one started, on the rail under it: a smaller, muted
    * title like an orchestrator's agent rows. */
   nested?: boolean;
+  /** Set on a session that started listed sessions through /operator: whether
+   * one of them is working. Its row wears the lead tint. */
+  leadWorking?: boolean;
+  /** The lead that started this session, marked "Agent of <lead>". */
+  agentOfId?: string;
+  agentOfTitle?: string;
   /** How many listed sessions this one started through /operator. */
   startedCount?: number;
   /** Whether those sessions are showing on the rail below. */
@@ -4947,6 +4974,15 @@ export const SessionCard = memo(function SessionCard({
       >
         <modeStyle.Icon className="size-3" strokeWidth={1.75} />
       </span>
+    ) : null;
+  const agentOfMark =
+    agentOfId && agentOfTitle ? (
+      <AgentOfMark
+        leadTitle={agentOfTitle}
+        onOpen={() =>
+          onSelect(agentOfId, { shiftKey: false, ctrlKey: false, metaKey: false })
+        }
+      />
     ) : null;
   // Set once the card has painted, so only later changes animate.
   const cardShown = useRef(false);
@@ -5265,6 +5301,9 @@ export const SessionCard = memo(function SessionCard({
                         }`
           }`}
         >
+          {leadWorking !== undefined ? (
+            <LeadRowTint working={leadWorking} />
+          ) : null}
           {dropTarget ? (
             <div className="pointer-events-none absolute inset-0 rounded-md bg-accent/20" />
           ) : null}
@@ -5352,6 +5391,7 @@ export const SessionCard = memo(function SessionCard({
                   }`}
                 />
                 <span className="flex shrink-0 items-center gap-1">
+                  {agentOfMark}
                   {linkedUpdateDot}
                   {workItemBadge}
                   {modeBadge}
@@ -5450,6 +5490,7 @@ export const SessionCard = memo(function SessionCard({
                   text={title}
                   className="line-clamp-1 text-[13px] font-semibold leading-snug text-content"
                 />
+                {agentOfMark}
                 {headerRow ? null : (
                   <span className="ml-auto flex shrink-0 items-center gap-1.5 pl-2">
                     {linkedUpdateDot}

@@ -4358,3 +4358,32 @@ html.layout-inset.theme-light .dialog-scrim {
     var(--color-background-base)
   );
 }
+
+/* A working /operator lead's sidebar row: one slow sheen in the operator
+   colour every four seconds (lead_marks.rs). Reduced motion keeps only the
+   static tint. */
+.sidebar-lead-sheen {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    105deg,
+    transparent 30%,
+    rgb(56 189 248 / 0.18) 50%,
+    transparent 70%
+  );
+  transform: translateX(-120%);
+  animation: sidebar-lead-sweep 4000ms linear infinite;
+}
+
+@keyframes sidebar-lead-sweep {
+  35%,
+  100% {
+    transform: translateX(120%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-lead-sheen {
+    display: none;
+  }
+}
